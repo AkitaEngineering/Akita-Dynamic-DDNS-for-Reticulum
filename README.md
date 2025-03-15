@@ -1,6 +1,6 @@
 # Akita Dynamic DDNS for Reticulum
 
-Akita is a distributed, dynamic destination naming system (DDNS) designed for the Reticulum network. It provides a robust and decentralized way to associate human-readable names with dynamic Reticulum identities (RIDs).
+Akita Dynamic DDNS for Reticulum is a distributed, dynamic destination naming system (DDNS) designed for the Reticulum network. It provides a robust and decentralized way to associate human-readable names with dynamic Reticulum identities (RIDs).
 
 ## Features
 
