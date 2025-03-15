@@ -47,8 +47,6 @@ Akita Dynamic DDNS for Reticulum is a distributed, dynamic destination naming sy
     python akita_ddns.py
     ```
 
-    (Replace `akita_ddns.py` with the filename you chose.)
-
 2.  **Use the CLI:**
 
     ```bash
