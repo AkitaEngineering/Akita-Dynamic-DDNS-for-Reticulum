@@ -1,0 +1,74 @@
+# akita_config.yaml - Example Configuration for Akita DDNS
+
+# --- Core Settings ---
+
+# Path for Reticulum storage (identities, transport data, etc.)
+# Default: ~/.config/reticulum
+storage_path: "~/.config/reticulum"
+
+# IMPORTANT: The Identity hash defining THIS Akita DDNS network.
+# All nodes participating in the *same* DDNS must use the *same* hash.
+# Generate one using: python -c "import reticulum as ret; print(ret.Identity().hash.hex())"
+# If left blank or commented out, an ephemeral one is generated (only for isolated testing).
+akita_namespace_identity_hash: "GENERATE_AND_PASTE_YOUR_SHARED_AKITA_HASH_HERE" # <--- REPLACE THIS
+
+# UDP Port for Akita service discovery and communication via Reticulum's AutoInterface.
+# Ensure this port is open/forwarded if needed for nodes on different networks.
+akita_port: 48000
+
+# --- Timing Settings (seconds) ---
+
+# Base interval for nodes to re-announce their registered names. Jitter is added automatically.
+# A longer interval reduces network traffic but increases time for updates to be noticed if gossip fails.
+update_interval: 3600 # 1 hour
+
+# Default time-to-live for registrations if not specified by the client.
+# How long a registration remains valid after its last update/registration.
+default_ttl: 86400 # 1 day (24 * 60 * 60)
+
+# Base interval for gossiping registry information. Jitter is added automatically.
+# More frequent gossip propagates changes faster but increases traffic.
+gossip_interval: 120 # 2 minutes
+
+# How often the node checks its local registry for expired entries.
+ttl_check_interval: 600 # 10 minutes
+
+# How long resolved names stay in the local cache. Shorter TTL means more network lookups
+# but faster reaction to changed RIDs.
+cache_ttl: 300 # 5 minutes
+
+# --- Performance & Limits ---
+
+# Maximum number of entries in the resolution cache *per namespace*.
+# Prevents the cache from growing indefinitely.
+max_cache_size: 1000
+
+# Max incoming requests per second (token bucket rate) before dropping packets.
+# Helps prevent DoS amplification.
+rate_limit_requests_per_sec: 10.0 # Can be float
+
+# --- Logging ---
+
+# Logging level: TRACE, DEBUG, VERBOSE, INFO, NOTICE, WARNING, ERROR, CRITICAL
+# Corresponds to Reticulum log levels. Use INFO or NOTICE for normal operation.
+log_level: "INFO"
+
+# --- Persistence Settings ---
+
+# Whether to save/load registry, namespaces, reputation to files.
+# Set to false for ephemeral nodes or if manual state management is preferred.
+persist_state: true
+
+# Directory to store persistent state files (registry.yaml, etc.).
+# Relative to execution directory or absolute path. Will be created if it doesn't exist.
+persistence_path: "./akita_state"
+
+# Filename for namespace owners persistence within persistence_path.
+namespace_owners_file: "namespaces.yaml"
+
+# Filename for registry persistence within persistence_path.
+registry_file: "registry.yaml"
+
+# Filename for reputation persistence within persistence_path.
+reputation_file: "reputation.yaml"
+
