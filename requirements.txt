@@ -1,0 +1,11 @@
+# requirements.txt for Akita DDNS
+
+# Core mesh networking library
+# Check Reticulum documentation for the latest stable version compatible with Python 3.7+
+reticulum>=0.8.0
+
+# YAML parsing for configuration and persistence
+# PyYAML 6.0+ requires libyaml development headers on some systems for speedups
+# Use >=5.4 for broader compatibility if libyaml is an issue
+pyyaml>=5.4
+
