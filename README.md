@@ -1,97 +1,37 @@
-# Akita Dynamic DDNS for Reticulum
+Akita DDNS - Distributed DNS for ReticulumDeveloped by Akita Engineering (www.akitaengineering.com)Akita DDNS is a robust, decentralized, and dynamic destination naming system (DDNS) built specifically for the Reticulum Network Stack. It provides a resilient alternative to traditional centralized DNS for mapping human-readable names to dynamic Reticulum identities (RIDs) within a mesh network.Leveraging Reticulum's inherent cryptography and peer-to-peer communication, Akita DDNS offers a secure and censorship-resistant way to manage names in environments where central authorities are undesirable or unavailable.FeaturesDecentralized Registry: No single point of failure. Registry data is distributed across participating nodes via a gossip protocol.Cryptographically Secure: Utilizes Reticulum's identity-based signatures for authenticating registrations, updates, and namespace control.Dynamic Updates: Nodes can automatically update their associated RIDs when they change.Namespace Management: Organize names into namespaces to prevent collisions. Supports cryptographic ownership of namespaces.Resilient: Designed to operate effectively over Reticulum's potentially low-bandwidth, high-latency mesh links.TTL (Time-to-Live): Registrations automatically expire, ensuring stale entries are eventually removed.Persistence: Optionally saves state (registry, namespaces, reputation) locally to survive restarts.Rate Limiting: Basic protection against request flooding.Reputation System: Optional tracking of peer behavior to potentially prioritize reliable nodes (future enhancement).Modular Codebase: Organized Python package for maintainability and extensibility.CLI Interface: Command-line tool for easy interaction (register, resolve, manage namespaces, inspect local state).Project Structureakita_ddns/
+├── __init__.py
+├── cli.py              # Command Line Interface logic
+├── config.py           # Configuration loading and management
+├── crypto.py           # Cryptographic functions (signing, verification)
+├── main.py             # Main entry point (server startup, CLI dispatch)
+├── namespace.py        # Namespace management logic
+├── network.py          # Reticulum network interactions (server, gossip)
+├── reputation.py       # Reputation system logic
+├── storage.py          # Registry and Cache management (including TTL & persistence)
+└── utils.py            # Utility functions (e.g., rate limiting)
+akita_config.yaml       # Configuration file (REQUIRED)
+README.md               # This file
+requirements.txt        # Project dependencies
+docs/
+├── examples.md         # Detailed usage examples
+├── architecture.md     # Overview of the code structure
+└── testing.md          # Guide on how to test the application
+RequirementsPython 3.7+See requirements.txt for specific Python package dependencies (reticulum, pyyaml).InstallationClone the repository:git clone [repository_url] # Replace with actual URL
+cd akita-ddns # Or your chosen directory name
+Install dependencies:pip install -r requirements.txt
+Configure: Create akita_config.yaml in the project root. Crucially, set akita_namespace_identity_hash to a unique, shared hash for all nodes participating in your Akita DDNS network. Refer to the example config file for details.UsageSee docs/examples.md for detailed usage examples.1. Run the Server Node:# Ensure akita_config.yaml is present
+python -m akita_ddns.main server
+This node will listen, gossip, and serve requests.2. Use the CLI:# Register a name (using default identity and default namespace)
+python -m akita_ddns.main cli register --name mynode
 
-Akita Dynamic DDNS for Reticulum is a distributed, dynamic destination naming system (DDNS) designed for the Reticulum network. It provides a robust and decentralized way to associate human-readable names with dynamic Reticulum identities (RIDs).
+# Resolve a name
+python -m akita_ddns.main cli resolve --name mynode
 
-## Features
+# Create a namespace (owned by default identity)
+python -m akita_ddns.main cli create_namespace --namespace home
 
--   **Distributed Registry:** Utilizes Reticulum's mesh networking for a resilient, decentralized registry.
--   **Dynamic Updates:** Allows devices to dynamically update their names when their RIDs change.
--   **Name Resolution:** Resolves human-readable names to RIDs through the Reticulum network.
--   **Namespace Management:** Organizes names with namespaces, preventing collisions.
--   **Security and Authentication:** Uses Reticulum's cryptography for secure updates and queries.
--   **Extensible Design:** Designed to be easily extended with new features.
--   **Gossip Protocol:** Implements a gossip protocol for efficient registry propagation.
--   **Rate Limiting:** Protects against abuse with request rate limiting.
--   **Namespace Ownership:** Allows namespace creation and ownership management.
--   **Reputation System:** Maintains node reputation for reliable service.
--   **CLI Interface:** Provides a command-line interface for easy management.
--   **Configuration File:** Uses a YAML configuration file for easy customization.
-
-## Requirements
-
--   Python 3.6+
--   Reticulum
-
-## Installation
-
-1.  Clone the repository:
-
-    ```bash
-    git clone [repository_url]
-    cd [repository_directory]
-    ```
-
-2.  Install Reticulum (if not already installed):
-
-    ```bash
-    pip install reticulum
-    ```
-
-3.  Create or modify the `akita_config.yaml` file to your liking. An example file will be created if one does not exist.
-
-## Usage
-
-1.  **Run Akita:**
-
-    ```bash
-    python akita_ddns.py
-    ```
-
-2.  **Use the CLI:**
-
-    ```bash
-    python akita_ddns.py <command> [options]
-    ```
-
-    **Commands:**
-
-    -   `register`: Register a name.
-    -   `resolve`: Resolve a name.
-    -   `create_namespace`: Create a namespace.
-
-    **Options:**
-
-    -   `--name`: Name to register or resolve.
-    -   `--namespace`: Namespace (default: Akita namespace).
-    -   `--rid`: RID to register.
-    -   `--owner`: Owner RID for namespace creation.
-
-    **Example:**
-
-    ```bash
-    python akita_ddns.py register --name my-device.home --rid abc123def456
-    python akita_ddns.py resolve --name my-device.home
-    python akita_ddns.py create_namespace --namespace my_namespace --owner owner_rid
-    ```
-
-## Configuration (`akita_config.yaml`)
-
--   `akita_namespace`: Unique namespace for Akita.
--   `akita_port`: Port for Akita service.
--   `update_interval`: Interval for name updates (seconds).
--   `cache_ttl`: Cache time-to-live (seconds).
--   `log_level`: Logging level (e.g., INFO, DEBUG).
--   `max_cache_size`: Maximum cache size.
--   `gossip_interval`: Gossip interval (seconds).
--   `ttl_interval`: TTL check interval (seconds).
--   `default_ttl`: Default TTL for registrations (seconds).
--   `gossip_neighbors`: Number of gossip neighbors.
--   `rate_limit`: Requests per second limit.
--   `namespace_owners`: Dictionary of namespace owners.
--   `reputation`: Dictionary of node reputations.
-
-## Contributing
-
-Contributions are welcome! Please submit pull requests or open issues for bug reports and feature requests.
+# List local persisted state (if enabled)
+python -m akita_ddns.main cli list --registry --namespaces
+Use python -m akita_ddns.main cli <command> --help for command-specific options.Configuration (akita_config.yaml)This file controls Akita's behavior. Key settings include:akita_namespace_identity_hash: Mandatory shared hash defining your network.persist_state: Enable/disable saving state to disk.persistence_path: Directory for state files.Timing intervals (gossip_interval, ttl_check_interval, etc.).Logging level (log_level).Refer to the example akita_config.yaml for all options and detailed comments.LicenseThis project is licensed under the GNU General Public License v3.0. See the LICENSE file for details.ContributingContributions are welcome! Please refer to docs/testing.md for testing information. Submit pull requests or open issues on the project repository.Akita Engineering - Building resilient communication systems.www.akitaengineering.com.
 
 
