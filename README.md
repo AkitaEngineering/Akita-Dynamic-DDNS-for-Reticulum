@@ -51,7 +51,7 @@ docs/
 
 1.  Clone the repository:
     ```bash
-    git clone [repository_url] # Replace with actual URL
+    git clone Akita-Dynamic-DDNS-for-Reticulum # Replace with actual URL
     cd akita-ddns # Or your chosen directory name
     ```
 2.  Install dependencies:
