@@ -20,32 +20,6 @@ Leveraging Reticulum's inherent cryptography and peer-to-peer communication, Aki
 * **Modular Codebase:** Organized Python package for maintainability and extensibility.
 * **CLI Interface:** Command-line tool for easy interaction (register, resolve, manage namespaces, inspect local state).
 
-## Project Structure
-```
-akita_ddns/
-├── init.py
-├── cli.py              # Command Line Interface logic
-├── config.py           # Configuration loading and management
-├── crypto.py           # Cryptographic functions (signing, verification)
-├── main.py             # Main entry point (server startup, CLI dispatch)
-├── namespace.py        # Namespace management logic
-├── network.py          # Reticulum network interactions (server, gossip)
-├── reputation.py       # Reputation system logic
-├── storage.py          # Registry and Cache management (including TTL & persistence)
-└── utils.py            # Utility functions (e.g., rate limiting)
-akita_config.yaml       # Configuration file (REQUIRED)
-README.md               # This file
-requirements.txt        # Project dependencies
-docs/
-├── examples.md         # Detailed usage examples
-├── architecture.md     # Overview of the code structure
-└── testing.md          # Guide on how to test the application
-
-```
-## Requirements
-
-* Python 3.7+
-* See `requirements.txt` for specific Python package dependencies (`reticulum`, `pyyaml`).
 
 ## Installation
 
