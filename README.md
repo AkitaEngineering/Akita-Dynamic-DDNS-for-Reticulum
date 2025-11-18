@@ -55,7 +55,7 @@ See `requirements.txt` for specific Python package dependencies (`reticulum`, `p
 ## Installation
 Clone the repository:
 
-    git clone https://github.com/AkitaEngineering/Akita-Dynamic-DDNS-for-Reticulum #
+    git clone https://github.com/AkitaEngineering/Akita-Dynamic-DDNS-for-Reticulum 
     cd akita-ddns # Or your chosen directory name
 
 Install dependencies:
