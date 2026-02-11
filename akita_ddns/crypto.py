@@ -1,5 +1,5 @@
 # akita_ddns/crypto.py
-import reticulum as ret
+import RNS as ret
 import logging
 from typing import Optional
 
@@ -20,14 +20,46 @@ def verify_signature(data: bytes, signature: bytes, identity_hash: bytes) -> boo
     """Verifies a signature against data using the claimed identity hash."""
     if not isinstance(data, bytes) or not isinstance(signature, bytes):
         return False
-    if not isinstance(identity_hash, bytes) or len(identity_hash) != ret.Identity.HASHLENGTH // 8:
+    hash_len_bits = getattr(ret.Identity, "TRUNCATED_HASHLENGTH", None)
+    if hash_len_bits is None:
+        hash_len_bits = getattr(ret.Identity, "HASHLENGTH", 256)
+    if not isinstance(identity_hash, bytes) or len(identity_hash) != int(hash_len_bits) // 8:
          return False
 
     try:
-        # Creates an identity handle. Note: Reticulum must know the Public Key 
-        # (via previous Announcement or storage) to verify.
-        verifier_identity = ret.Identity(identity_hash=identity_hash)
-        return verifier_identity.verify(signature=signature, data=data)
+        # Requires that the public key for the identity hash is known to RNS.
+        verifier_identity = ret.Identity.recall(identity_hash, from_identity_hash=True)
+        if not verifier_identity:
+            return False
+        return verifier_identity.validate(signature, data)
+    except Exception as e:
+        log.debug(f"Signature verification failed: {e}")
+        return False
+
+def identity_from_public_key(public_key: bytes) -> Optional[ret.Identity]:
+    """Creates an Identity instance from a public key."""
+    if not isinstance(public_key, bytes):
+        return None
+    try:
+        try:
+            identity = ret.Identity(create_keys=False)
+        except TypeError:
+            identity = ret.Identity()
+        if identity.load_public_key(public_key):
+            return identity
+    except Exception as e:
+        log.debug(f"Failed to load public key: {e}")
+    return None
+
+def verify_signature_with_public_key(data: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Verifies a signature using a provided public key."""
+    if not isinstance(data, bytes) or not isinstance(signature, bytes):
+        return False
+    identity = identity_from_public_key(public_key)
+    if not identity:
+        return False
+    try:
+        return identity.validate(signature, data)
     except Exception as e:
         log.debug(f"Signature verification failed: {e}")
         return False

@@ -7,12 +7,12 @@ import os
 from typing import Dict, Tuple, Optional, Any
 
 from .config import get_config
-from .crypto import verify_signature
+from .crypto import verify_signature, verify_signature_with_public_key
 
 log = logging.getLogger(__name__)
 
-# Registry Entry: (rid_bytes, registration_timestamp, signature_bytes, expiration_timestamp)
-RegistryEntry = Tuple[bytes, float, bytes, float]
+# Registry Entry: (rid_bytes, registration_timestamp, signature_bytes, expiration_timestamp, public_key_bytes)
+RegistryEntry = Tuple[bytes, float, bytes, float, bytes]
 # Cache Entry: (rid_bytes, cache_timestamp)
 CacheEntry = Tuple[bytes, float]
 
@@ -55,7 +55,7 @@ class PersistentStorage:
             s_names = {}
             for name, entry in names.items():
                 if time.time() < entry[3]: # Check expiry
-                    s_names[name] = (entry[0].hex(), entry[1], entry[2].hex(), entry[3])
+                    s_names[name] = (entry[0].hex(), entry[1], entry[2].hex(), entry[3], entry[4].hex())
             if s_names: serializable[ns] = s_names
         self._save_yaml(serializable, self.config["registry_file_path"])
 
@@ -68,7 +68,8 @@ class PersistentStorage:
             for name, entry in names.items():
                 try:
                     if now < entry[3]: # Not expired
-                        v_names[name] = (bytes.fromhex(entry[0]), entry[1], bytes.fromhex(entry[2]), entry[3])
+                        if len(entry) >= 5:
+                            v_names[name] = (bytes.fromhex(entry[0]), entry[1], bytes.fromhex(entry[2]), entry[3], bytes.fromhex(entry[4]))
                 except (ValueError, IndexError, TypeError): pass
             if v_names: registry[ns] = v_names
         return registry
@@ -93,12 +94,12 @@ class Registry:
         self._lock = threading.RLock()
         self._registry = self.storage.load_registry()
 
-    def register(self, ns: str, name: str, rid: bytes, ts: float, sig: bytes, exp: float) -> bool:
+    def register(self, ns: str, name: str, rid: bytes, ts: float, sig: bytes, exp: float, public_key: bytes) -> bool:
         with self._lock:
-            entry = (rid, ts, sig, exp)
+            entry = (rid, ts, sig, exp, public_key)
             curr = self._registry.get(ns, {}).get(name)
             # Optimization: don't save if identical
-            if curr and curr[0] == rid and curr[2] == sig and curr[3] == exp: return True
+            if curr and curr[0] == rid and curr[2] == sig and curr[3] == exp and curr[4] == public_key: return True
             
             self._registry.setdefault(ns, {})[name] = entry
             log.info(f"Registered {name}@{ns} -> {rid.hex()}")
@@ -123,7 +124,7 @@ class Registry:
         with self._lock:
             for ns, names in gossip.items():
                 for name, entry in names.items():
-                    rid, ts, sig, exp = entry
+                    rid, ts, sig, exp, pubkey = entry
                     if now >= exp: continue
                     
                     # Check Ownership
@@ -134,7 +135,7 @@ class Registry:
                     ttl = int(exp - ts)
                     if ttl < 0: ttl = 0
                     payload = f"{ns}:{name}:{rid.hex()}:{ttl}".encode("utf-8")
-                    if not verify_signature(payload, sig, rid): continue
+                    if not verify_signature_with_public_key(payload, sig, pubkey): continue
 
                     # Update logic
                     curr = self._registry.get(ns, {}).get(name)

@@ -12,7 +12,8 @@ This document outlines the current status and future testing strategies for the 
 ## Current Status
 
 - **Manual testing** is the primary method used during development.
-- **No automated unit or integration tests** are currently implemented.
+- **Basic unit tests** are implemented for utility functions (see `tests/test_utils.py`).
+- **No integration or end-to-end tests** are currently implemented.
 
 ---
 
@@ -91,17 +92,30 @@ python -m akita_ddns.main server --config node_b_config.yaml
 
 ---
 
-### 2. Unit Testing (Future Goal)
+### 1. Unit Testing
 
-Testing individual functions and classes in isolation.
+Basic unit tests are implemented for core utility functions.
 
-#### Key Focus Areas
+#### Running Tests
+
+Install test dependencies:
+
+    pip install pytest
+
+Run tests:
+
+    pytest tests/
+
+#### Key Focus Areas (Implemented)
 
 - `utils.parse_name`
+- `utils.RateLimiter`
+
+#### Key Focus Areas (Future)
+
 - `storage.Registry` (add, resolve, TTL expiry)
 - Cryptographic verification (signatures)
 - Configuration loading (`config.load_config`)
-- `RateLimiter` behavior
 
 #### Best Practices
 

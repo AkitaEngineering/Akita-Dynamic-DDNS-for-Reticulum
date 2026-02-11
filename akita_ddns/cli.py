@@ -3,11 +3,12 @@ import argparse
 import time
 import threading
 import sys
-import reticulum as ret
+import RNS as ret
 import logging
+import os
 
 from .config import get_config
-from .utils import parse_name
+from .utils import parse_name, load_or_create_identity
 from .network import APP_NAME
 from .crypto import generate_signature
 
@@ -15,15 +16,18 @@ log = logging.getLogger(__name__)
 
 _res_event = threading.Event()
 _res_data = None
+_response_identity_hash = None
 
-def _on_response(pk, iface):
+def _on_response(data, packet):
     global _res_data
     try:
-        data = iface.packet.plaintext.decode().split(":")
-        if data[0] == "RESPONSE":
-            _res_data = data[3] # rid_hex
-            _res_event.set()
-    except: pass
+        parts = data.decode().split(":")
+        if parts[0] == "RESPONSE" and len(parts) >= 5:
+            if _response_identity_hash and parts[4] == _response_identity_hash:
+                _res_data = parts[3] # rid_hex
+                _res_event.set()
+    except Exception as e:
+        log.error(f"Error processing response packet: {e}")
 
 def run_cli(args, config, r_instance):
     # --- Identity Setup ---
@@ -40,35 +44,30 @@ def run_cli(args, config, r_instance):
             print("Error loading owner identity file.")
             sys.exit(1)
     else:
-        # Use default if available, else create ephemeral
-        identity = r_instance.get_identity()
-        if not identity:
-             identity = ret.Identity()
-             # Don't save ephemeral
-
-    # CRITICAL FIX: Set the active identity for this Reticulum instance
-    # so outgoing packets use the correct source hash.
-    r_instance.set_identity(identity)
+        # Use default identity in storage path
+        identity_path = os.path.join(config["storage_path"], "akita_identity")
+        identity = load_or_create_identity(identity_path)
 
     # --- Network Setup ---
-    ns_hash = bytes.fromhex(config["akita_namespace_identity_hash"])
     sender = ret.Destination(
-        ret.Identity(identity_hash=ns_hash),
+        None,
         ret.Destination.OUT,
-        ret.Destination.BROADCAST,
+        ret.Destination.PLAIN,
         APP_NAME, "broadcast"
     )
 
     # Listener for Resolve
     if args.command == "resolve":
+        global _response_identity_hash
+        _response_identity_hash = identity.hash.hex()
         listener = ret.Destination(
-            identity,
+            None,
             ret.Destination.IN,
-            ret.Destination.SINGLE,
+            ret.Destination.PLAIN,
             APP_NAME, "response"
         )
         listener.set_proof_strategy(ret.Destination.PROVE_NONE)
-        listener.register_incoming_callback(_on_response)
+        listener.set_packet_callback(_on_response)
 
     # --- Commands ---
     if args.command == "register":
@@ -79,8 +78,9 @@ def run_cli(args, config, r_instance):
         # Sign
         data = f"{ns}:{name}:{rid_bytes.hex()}:{ttl}".encode("utf-8")
         sig = generate_signature(data, identity)
+        pubkey_hex = identity.get_public_key().hex()
         
-        msg = f"REGISTER:{ns}:{name}:{rid_bytes.hex()}:{identity.hash.hex()}:{sig.hex()}:{ttl}".encode("utf-8")
+        msg = f"REGISTER:{ns}:{name}:{rid_bytes.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}".encode("utf-8")
         if ret.Packet(sender, msg).send():
             print(f"Registration sent for {name}@{ns}")
         else:
@@ -103,7 +103,8 @@ def run_cli(args, config, r_instance):
         ns = args.namespace
         data = f"NAMESPACE_CREATE:{ns}:{identity.hash.hex()}".encode("utf-8")
         sig = generate_signature(data, identity)
-        msg = f"{data.decode()}:{sig.hex()}".encode("utf-8")
+        pubkey_hex = identity.get_public_key().hex()
+        msg = f"{data.decode()}:{pubkey_hex}:{sig.hex()}".encode("utf-8")
         
         if ret.Packet(sender, msg).send():
              print(f"Namespace creation sent for {ns}")

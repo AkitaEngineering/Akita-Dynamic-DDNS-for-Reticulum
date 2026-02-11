@@ -4,10 +4,11 @@ import argparse
 import asyncio
 import logging
 import signal
+import os
 
 # Try importing Reticulum
 try:
-    import reticulum as ret
+    import RNS as ret
 except ImportError:
     print("Reticulum not found. Install it via pip.")
     sys.exit(1)
@@ -16,6 +17,7 @@ except ImportError:
 from .config import load_config, get_config
 from .storage import PersistentStorage, Registry, Cache
 from .namespace import NamespaceManager
+from .utils import load_or_create_identity
 from .reputation import ReputationManager
 from .network import AkitaServer
 from .cli import setup_cli_parser, run_cli
@@ -40,12 +42,9 @@ async def main_server_loop():
     r = ret.Reticulum(configdir=config["storage_path"])
     
     # Identity
-    if not r.get_identity():
-        i = ret.Identity()
-        r.set_identity(i)
-        log.info(f"Created new identity: {i.hash.hex()}")
-    else:
-        log.info(f"Using identity: {r.get_identity().hash.hex()}")
+    identity_path = os.path.join(config["storage_path"], "akita_identity")
+    i = load_or_create_identity(identity_path)
+    log.info(f"Using identity: {i.hash.hex()}")
 
     # Components
     storage = PersistentStorage(config)
@@ -54,7 +53,7 @@ async def main_server_loop():
     ns = NamespaceManager(storage, config)
     rep = ReputationManager(storage, config)
     
-    server = AkitaServer(r, reg, cache, ns, rep)
+    server = AkitaServer(r, reg, cache, ns, rep, i)
     server_ref = server
     
     # Tasks
@@ -74,20 +73,20 @@ async def main_server_loop():
     try: await t2; 
     except asyncio.CancelledError: pass
     
-    r.stop()
 
 def main():
     # Load config first
-    try: load_config()
-    except Exception as e:
-        print(f"Config Error: {e}")
-        sys.exit(1)
-        
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="Path to config file", default="akita_config.yaml")
     parser.add_argument("mode", choices=["server", "cli"], nargs="?", default="server")
     
     # Parse mode first
     args, rem = parser.parse_known_args()
+    
+    try: load_config(args.config)
+    except Exception as e:
+        print(f"Config Error: {e}")
+        sys.exit(1)
     
     if args.mode == "server":
         signal.signal(signal.SIGINT, sig_handler)
@@ -100,11 +99,10 @@ def main():
         c_args = cp.parse_args()
         
         # Reticulum for CLI (minimal logging)
-        ret.set_loglevel(ret.loglevel.critical)
+        logging.getLogger().setLevel(logging.CRITICAL)
         r = ret.Reticulum(configdir=get_config()["storage_path"])
         
         run_cli(c_args, get_config(), r)
-        r.stop()
 
 if __name__ == "__main__":
     main()

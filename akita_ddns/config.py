@@ -2,7 +2,7 @@
 import yaml
 import os
 import logging
-import reticulum as ret
+import RNS as ret
 import threading
 from typing import Dict, Any
 
@@ -70,12 +70,14 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
                 except Exception as e:
                     log.error(f"Failed to create storage dir: {e}")
 
-            # Namespace Identity Hash
             ns_hash_str = effective_config.get("akita_namespace_identity_hash")
             if ns_hash_str:
                 try:
                     ns_hash_bytes = bytes.fromhex(str(ns_hash_str))
-                    if len(ns_hash_bytes) != ret.Identity.HASHLENGTH // 8:
+                    hash_len_bits = getattr(ret.Identity, "TRUNCATED_HASHLENGTH", None)
+                    if hash_len_bits is None:
+                        hash_len_bits = getattr(ret.Identity, "HASHLENGTH", 256)
+                    if len(ns_hash_bytes) != int(hash_len_bits) // 8:
                         raise ValueError("Invalid hash length")
                     effective_config["akita_namespace_identity_hash"] = str(ns_hash_str)
                     log.info(f"Network Hash: {ns_hash_str}")

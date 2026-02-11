@@ -10,7 +10,7 @@ storage_path: "~/.config/reticulum"
 # All nodes participating in the *same* DDNS must use the *same* hash.
 # Generate one using: python -c "import RNS as ret; print(ret.Identity().hash.hex())"
 # If left blank or commented out, an ephemeral one is generated (only for isolated testing).
-akita_namespace_identity_hash: "GENERATE_AND_PASTE_YOUR_SHARED_AKITA_HASH_HERE" # <--- REPLACE THIS
+akita_namespace_identity_hash: "ebbf5138cd8d432fd2eba7a528347838" # <--- REPLACE THIS
 
 # UDP Port for Akita service discovery and communication via Reticulum's AutoInterface.
 # Ensure this port is open/forwarded if needed for nodes on different networks.

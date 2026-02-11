@@ -4,6 +4,9 @@ import threading
 import logging
 from typing import Tuple
 
+import RNS as ret
+import os
+
 log = logging.getLogger(__name__)
 
 class RateLimiter:
@@ -44,3 +47,16 @@ def parse_name(full_name: str, default_namespace: str) -> Tuple[str, str]:
     if not namespace_part: raise ValueError("Namespace part cannot be empty.")
 
     return name_part, namespace_part
+
+def load_or_create_identity(identity_path: str, save: bool = True) -> ret.Identity:
+    """Loads an identity from file or creates a new one."""
+    if not identity_path:
+        raise ValueError("Identity path is required")
+    identity = None
+    if os.path.exists(identity_path):
+        identity = ret.Identity.from_file(identity_path)
+    if not identity:
+        identity = ret.Identity()
+        if save:
+            identity.to_file(identity_path)
+    return identity

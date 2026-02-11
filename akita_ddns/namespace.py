@@ -4,7 +4,7 @@ import threading
 from typing import Dict
 
 from .storage import PersistentStorage
-from .crypto import verify_signature
+from .crypto import verify_signature, verify_signature_with_public_key, identity_from_public_key
 
 log = logging.getLogger(__name__)
 
@@ -14,12 +14,15 @@ class NamespaceManager:
         self._lock = threading.RLock()
         self._owners = self.storage.load_namespaces()
 
-    def create_namespace(self, ns: str, owner: bytes, sig: bytes) -> bool:
+    def create_namespace(self, ns: str, owner: bytes, owner_pubkey: bytes, sig: bytes) -> bool:
         if not ns or '.' in ns: return False
         
         # Verify Sig
         payload = f"NAMESPACE_CREATE:{ns}:{owner.hex()}".encode("utf-8")
-        if not verify_signature(payload, sig, owner):
+        identity = identity_from_public_key(owner_pubkey)
+        if not identity or identity.hash != owner:
+            return False
+        if not verify_signature_with_public_key(payload, sig, owner_pubkey):
             log.warning(f"Invalid signature for namespace {ns}")
             return False
 
