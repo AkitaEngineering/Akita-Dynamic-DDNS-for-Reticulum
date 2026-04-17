@@ -7,8 +7,8 @@ import yaml
 import RNS as ret
 
 from .config import get_config
-from .utils import RateLimiter
-from .crypto import generate_signature, verify_signature, verify_signature_with_public_key, identity_from_public_key
+from .utils import RateLimiter, build_registration_payload
+from .crypto import generate_signature, verify_signature_with_public_key, identity_from_public_key
 
 log = logging.getLogger(__name__)
 APP_NAME = "akita_ddns"
@@ -46,57 +46,63 @@ class AkitaServer:
 
     def _on_packet(self, data, packet):
         if self._shutdown or not self.rate_limiter.check(): return
-        if not packet or not packet.source_hash: return
-        if packet.source_hash == self.identity.hash: return
+        if not packet: return
 
         try:
             text = data.decode("utf-8")
             cmd, payload = text.split(":", 1)
             
-            if cmd == "REGISTER": self._handle_register(payload, packet.source_hash)
-            elif cmd == "RESOLVE": self._handle_resolve(payload, packet.source_hash)
-            elif cmd == "GOSSIP": self._handle_gossip(payload, packet.source_hash)
-            elif cmd == "NAMESPACE_CREATE": self._handle_ns_create(payload, packet.source_hash)
-            else: self.rep_mgr.update_reputation(packet.source_hash, -1)
+            if cmd == "REGISTER": self._handle_register(payload)
+            elif cmd == "RESOLVE": self._handle_resolve(payload)
+            elif cmd == "GOSSIP": self._handle_gossip(payload)
+            elif cmd == "NAMESPACE_CREATE": self._handle_ns_create(payload)
+            else: log.warning(f"Unknown packet command: {cmd}")
             
         except Exception as e:
             log.error(f"Packet error: {e}")
 
-    def _handle_register(self, payload, src):
-        # ns:name:rid:id_hash:pubkey:sig:ttl
+    def _handle_register(self, payload):
+        # ns:name:rid:id_hash:pubkey:sig:ttl[:timestamp]
         try:
             parts = payload.split(":")
-            if len(parts) != 7: raise ValueError
-            ns, name, rid_hex, id_hex, pub_hex, sig_hex, ttl = parts
+            if len(parts) == 7:
+                ns, name, rid_hex, id_hex, pub_hex, sig_hex, ttl = parts
+                timestamp = time.time()
+                verify_data = build_registration_payload(ns, name, rid_hex, ttl)
+            elif len(parts) == 8:
+                ns, name, rid_hex, id_hex, pub_hex, sig_hex, ttl, timestamp_str = parts
+                timestamp = int(timestamp_str)
+                verify_data = build_registration_payload(ns, name, rid_hex, ttl, timestamp)
+            else:
+                raise ValueError("Invalid register payload")
             
             rid = bytes.fromhex(rid_hex)
             signer = bytes.fromhex(id_hex)
             pubkey = bytes.fromhex(pub_hex)
             sig = bytes.fromhex(sig_hex)
+            ttl = int(ttl)
             
-            if signer != src: return # Mismatch
             identity = identity_from_public_key(pubkey)
             if not identity or identity.hash != signer: return
             
             # Verify Sig
-            verify_data = f"{ns}:{name}:{rid_hex}:{ttl}".encode("utf-8")
             if not verify_signature_with_public_key(verify_data, sig, pubkey): return
             
             # Check Auth
             if not self.ns_mgr.is_authorized(ns, signer): return
             
             # Register
-            self.reg.register(ns, name, rid, time.time(), sig, time.time() + int(ttl), pubkey)
-            self.rep_mgr.update_reputation(src, 1)
+            self.reg.register(ns, name, rid, timestamp, sig, timestamp + ttl, pubkey)
+            self.rep_mgr.update_reputation(signer, 1)
             
         except Exception as e:
             log.error(f"Error handling register: {e}")
 
-    def _handle_resolve(self, payload, src):
+    def _handle_resolve(self, payload):
         # ns:name:req_rid
         try:
             ns, name, req_rid = payload.split(":")
-            if bytes.fromhex(req_rid) != src: return
+            req_identity = bytes.fromhex(req_rid)
             
             # Check Cache/Registry
             rid = self.cache.get(ns, name)
@@ -108,7 +114,7 @@ class AkitaServer:
             
             if rid:
                 # Send Response
-                resp_data = f"RESPONSE:{ns}:{name}:{rid.hex()}:{src.hex()}".encode("utf-8")
+                resp_data = f"RESPONSE:{ns}:{name}:{rid.hex()}:{req_identity.hex()}".encode("utf-8")
                 dest = ret.Destination(
                     None,
                     ret.Destination.OUT,
@@ -121,29 +127,32 @@ class AkitaServer:
         except Exception as e:
             log.error(f"Error handling resolve: {e}")
 
-    def _handle_gossip(self, payload, src):
+    def _handle_gossip(self, payload):
         try:
             data = yaml.safe_load(payload)
+            if not isinstance(data, dict):
+                return
             # Deserialize
             processed = {}
             for ns, names in data.items():
+                if not isinstance(names, dict):
+                    continue
                 processed[ns] = {}
                 for n, e in names.items():
                     # hex -> bytes
                     processed[ns][n] = (bytes.fromhex(e[0]), e[1], bytes.fromhex(e[2]), e[3], bytes.fromhex(e[4]))
             
             owners = self.ns_mgr.get_owners()
-            self.reg.process_gossip(processed, owners, src)
-            self.rep_mgr.update_reputation(src, 1)
+            self.reg.process_gossip(processed, owners)
         except Exception as e:
             log.error(f"Error handling gossip: {e}")
 
-    def _handle_ns_create(self, payload, src):
+    def _handle_ns_create(self, payload):
         try:
             ns, owner_hex, pub_hex, sig_hex = payload.split(":")
-            if bytes.fromhex(owner_hex) != src: return
-            if self.ns_mgr.create_namespace(ns, bytes.fromhex(owner_hex), bytes.fromhex(pub_hex), bytes.fromhex(sig_hex)):
-                self.rep_mgr.update_reputation(src, 1)
+            owner = bytes.fromhex(owner_hex)
+            if self.ns_mgr.create_namespace(ns, owner, bytes.fromhex(pub_hex), bytes.fromhex(sig_hex)):
+                self.rep_mgr.update_reputation(owner, 1)
         except Exception as e:
             log.error(f"Error handling namespace create: {e}")
 
@@ -176,10 +185,13 @@ class AkitaServer:
 
     # CLI Helpers
     def send_register(self, name, ns, rid, identity, ttl):
-        data = f"{ns}:{name}:{rid.hex()}:{ttl}".encode("utf-8")
+        timestamp = int(time.time())
+        data = build_registration_payload(ns, name, rid.hex(), ttl, timestamp)
         sig = generate_signature(data, identity)
+        if not sig:
+            return False
         pubkey_hex = identity.get_public_key().hex()
-        msg = f"REGISTER:{ns}:{name}:{rid.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}".encode("utf-8")
+        msg = f"REGISTER:{ns}:{name}:{rid.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}:{timestamp}".encode("utf-8")
         return ret.Packet(self.sender, msg).send()
 
     def send_resolve(self, name, ns, identity):
@@ -189,6 +201,8 @@ class AkitaServer:
     def send_ns_create(self, ns, identity):
         data = f"NAMESPACE_CREATE:{ns}:{identity.hash.hex()}".encode("utf-8")
         sig = generate_signature(data, identity)
+        if not sig:
+            return False
         pubkey_hex = identity.get_public_key().hex()
         msg = f"{data.decode()}:{pubkey_hex}:{sig.hex()}".encode("utf-8")
         return ret.Packet(self.sender, msg).send()

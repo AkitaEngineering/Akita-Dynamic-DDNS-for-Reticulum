@@ -8,7 +8,7 @@ import logging
 import os
 
 from .config import get_config
-from .utils import parse_name, load_or_create_identity
+from .utils import parse_name, load_or_create_identity, build_registration_payload
 from .network import APP_NAME
 from .crypto import generate_signature
 
@@ -74,13 +74,17 @@ def run_cli(args, config, r_instance):
         name, ns = parse_name(args.name, config["akita_namespace_identity_hash"])
         rid_bytes = bytes.fromhex(args.rid) if args.rid else identity.hash
         ttl = args.ttl or config["default_ttl"]
+        timestamp = int(time.time())
         
         # Sign
-        data = f"{ns}:{name}:{rid_bytes.hex()}:{ttl}".encode("utf-8")
+        data = build_registration_payload(ns, name, rid_bytes.hex(), ttl, timestamp)
         sig = generate_signature(data, identity)
+        if not sig:
+            print("Failed to sign registration.")
+            return
         pubkey_hex = identity.get_public_key().hex()
         
-        msg = f"REGISTER:{ns}:{name}:{rid_bytes.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}".encode("utf-8")
+        msg = f"REGISTER:{ns}:{name}:{rid_bytes.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}:{timestamp}".encode("utf-8")
         if ret.Packet(sender, msg).send():
             print(f"Registration sent for {name}@{ns}")
         else:
@@ -89,6 +93,9 @@ def run_cli(args, config, r_instance):
     elif args.command == "resolve":
         name, ns = parse_name(args.name, config["akita_namespace_identity_hash"])
         msg = f"RESOLVE:{ns}:{name}:{identity.hash.hex()}".encode("utf-8")
+        global _res_data
+        _res_data = None
+        _res_event.clear()
         
         if ret.Packet(sender, msg).send():
             print(f"Resolving {name}@{ns}...")
@@ -103,6 +110,9 @@ def run_cli(args, config, r_instance):
         ns = args.namespace
         data = f"NAMESPACE_CREATE:{ns}:{identity.hash.hex()}".encode("utf-8")
         sig = generate_signature(data, identity)
+        if not sig:
+            print("Failed to sign namespace creation request.")
+            return
         pubkey_hex = identity.get_public_key().hex()
         msg = f"{data.decode()}:{pubkey_hex}:{sig.hex()}".encode("utf-8")
         

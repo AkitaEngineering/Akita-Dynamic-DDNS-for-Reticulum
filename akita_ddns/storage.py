@@ -6,8 +6,8 @@ import yaml
 import os
 from typing import Dict, Tuple, Optional, Any
 
-from .config import get_config
-from .crypto import verify_signature, verify_signature_with_public_key
+from .crypto import verify_signature_with_public_key, identity_from_public_key
+from .utils import build_registration_payload
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ class Registry:
                     self.storage.save_registry(self._registry)
         return None
 
-    def process_gossip(self, gossip: Dict, owners: Dict, source: bytes) -> Tuple[int, int]:
+    def process_gossip(self, gossip: Dict, owners: Dict) -> Tuple[int, int]:
         new_c, upd_c = 0, 0
         now = time.time()
         changed = False
@@ -126,16 +126,21 @@ class Registry:
                 for name, entry in names.items():
                     rid, ts, sig, exp, pubkey = entry
                     if now >= exp: continue
+
+                    identity = identity_from_public_key(pubkey)
+                    if not identity:
+                        continue
                     
                     # Check Ownership
-                    if ns in owners and owners[ns] != rid.hex(): continue
+                    if ns in owners and owners[ns] != identity.hash.hex(): continue
 
                     # Verify Sig (Expensive, do last)
-                    # Reconstruct signed payload: ns:name:rid_hex:ttl
                     ttl = int(exp - ts)
                     if ttl < 0: ttl = 0
-                    payload = f"{ns}:{name}:{rid.hex()}:{ttl}".encode("utf-8")
-                    if not verify_signature_with_public_key(payload, sig, pubkey): continue
+                    payload = build_registration_payload(ns, name, rid.hex(), ttl, int(ts))
+                    legacy_payload = build_registration_payload(ns, name, rid.hex(), ttl)
+                    if not verify_signature_with_public_key(payload, sig, pubkey) and not verify_signature_with_public_key(legacy_payload, sig, pubkey):
+                        continue
 
                     # Update logic
                     curr = self._registry.get(ns, {}).get(name)

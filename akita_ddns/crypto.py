@@ -45,7 +45,8 @@ def identity_from_public_key(public_key: bytes) -> Optional[ret.Identity]:
             identity = ret.Identity(create_keys=False)
         except TypeError:
             identity = ret.Identity()
-        if identity.load_public_key(public_key):
+        identity.load_public_key(public_key)
+        if getattr(identity, "pub", None) is not None and getattr(identity, "sig_pub", None) is not None:
             return identity
     except Exception as e:
         log.debug(f"Failed to load public key: {e}")

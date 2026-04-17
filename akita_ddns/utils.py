@@ -2,7 +2,7 @@
 import time
 import threading
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 import RNS as ret
 import os
@@ -29,6 +29,13 @@ class RateLimiter:
                 self.tokens -= 1.0
                 return True
             return False
+
+def build_registration_payload(ns: str, name: str, rid_hex: str, ttl: int, timestamp: Optional[int] = None) -> bytes:
+    """Builds the signed registration payload used on the wire."""
+    payload = f"{ns}:{name}:{rid_hex}:{int(ttl)}"
+    if timestamp is not None:
+        payload = f"{payload}:{int(timestamp)}"
+    return payload.encode("utf-8")
 
 def parse_name(full_name: str, default_namespace: str) -> Tuple[str, str]:
     """Splits a name into (name, namespace)."""

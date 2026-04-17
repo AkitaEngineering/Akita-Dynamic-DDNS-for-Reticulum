@@ -4,7 +4,7 @@ import os
 import logging
 import RNS as ret
 import threading
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # --- Default Configuration Values ---
 DEFAULT_CONFIG = {
@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
 
 _config: Dict[str, Any] = {}
 _config_loaded = False
+_loaded_config_path: Optional[str] = None
 _load_lock = threading.Lock()
 
 # Initial basic logging
@@ -36,27 +37,28 @@ log = logging.getLogger(__name__)
 
 def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
     """Loads, validates, and returns the configuration."""
-    global _config, _config_loaded
+    global _config, _config_loaded, _loaded_config_path
     with _load_lock:
-        if _config_loaded:
+        normalized_config_path = os.path.abspath(os.path.expanduser(config_path))
+        if _config_loaded and _loaded_config_path == normalized_config_path:
             return _config
 
         loaded_config = {}
         effective_config = DEFAULT_CONFIG.copy()
 
-        log.info(f"Loading configuration from: {config_path}")
-        if os.path.exists(config_path):
+        log.info(f"Loading configuration from: {normalized_config_path}")
+        if os.path.exists(normalized_config_path):
             try:
-                with open(config_path, "r") as f:
+                with open(normalized_config_path, "r") as f:
                     loaded_config = yaml.safe_load(f)
                     if isinstance(loaded_config, dict):
                         effective_config.update(loaded_config)
                     else:
-                        log.warning(f"Config file '{config_path}' invalid. Using defaults.")
+                        log.warning(f"Config file '{normalized_config_path}' invalid. Using defaults.")
             except Exception as e:
                 log.error(f"Error loading config file: {e}. Using defaults.")
         else:
-            log.info(f"Config file '{config_path}' not found. Using defaults.")
+            log.info(f"Config file '{normalized_config_path}' not found. Using defaults.")
 
         # --- Validation & Setup ---
         try:
@@ -139,6 +141,7 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
 
         _config = effective_config
         _config_loaded = True
+        _loaded_config_path = normalized_config_path
         return _config
 
 def get_config() -> Dict[str, Any]:
