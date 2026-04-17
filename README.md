@@ -87,9 +87,21 @@ python -m akita_ddns.main --config akita_config.yaml cli list --registry --names
 ```
 
 Use:
-    python -m akita_ddns.main cli <command> --help
+    python -m akita_ddns.main --config akita_config.yaml cli <command> --help
 
 for command-specific options.
+
+---
+
+## Testing
+
+Run the test suite with:
+
+    pytest tests/
+
+Current automated coverage includes configuration loading, Reticulum public-key signature verification, packet dispatch behavior, gossip ownership checks, and utility helpers.
+
+See `docs/testing.md` for the current testing scope and manual multi-node validation guidance.
 
 ---
 

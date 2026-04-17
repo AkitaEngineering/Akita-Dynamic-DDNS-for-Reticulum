@@ -64,6 +64,7 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 - Defines default configuration values.
 - Loads configuration from `akita_config.yaml`.
 - Validates configuration settings.
+- Caches the most recently loaded config by path to avoid mixing settings from different config files in the same process.
 - Provides access to the global configuration dictionary.
 
 </details>
@@ -94,6 +95,7 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 <summary><strong>Click to expand</strong></summary>
 
 - Provides wrappers around Reticulum identity signing and verification.
+- Reconstructs Reticulum identities from embedded public keys for signature checks.
 - Functions for generating and verifying digital signatures.
 
 </details>
@@ -135,8 +137,9 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 
 - **AkitaServer:**
   - Handles all Reticulum network operations.
-  - Listens for incoming UDP packets.
-  - Defines packet handler `_handle_incoming_packet` for commands like REGISTER, RESOLVE, GOSSIP.
+  - Listens for incoming Reticulum packets on an Akita broadcast destination.
+  - Uses `_on_packet()` to dispatch commands like `REGISTER`, `RESOLVE`, `GOSSIP`, and `NAMESPACE_CREATE`.
+  - Verifies message authenticity from signed payload data and embedded public keys.
   - Sends and receives protocol messages.
   - Runs background tasks like gossiping the registry and TTL checks.
 
@@ -165,6 +168,7 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 
 - Provides miscellaneous utilities:
   - **RateLimiter:** Limits incoming request rates.
+  - **build_registration_payload:** Builds the signed registration payload used by CLI, server helpers, and gossip verification.
   - **parse_name:** Helper for parsing fully qualified names into name/namespace parts.
 
 </details>
@@ -182,10 +186,10 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 
 1. CLI/Client sends `REGISTER` packet (signed) via network.
 2. `AkitaServer.send_register()` → Reticulum broadcast.
-3. Server `AkitaServer._handle_incoming_packet()` receives packet.
+3. Server `AkitaServer._on_packet()` receives packet.
 4. Rate limit checked (`utils.RateLimiter`).
-5. Packet parsed, signature verified (`crypto.verify_signature`).
-6. Namespace ownership verified (`namespace.NamespaceManager.is_authorized`).
+5. Packet parsed and signature verified from the embedded public key.
+6. Namespace ownership verified against the signer identity (`namespace.NamespaceManager.is_authorized`).
 7. Entry added or updated in `storage.Registry`.
 8. State persisted via `PersistentStorage.save_registry()`.
 9. Reputation updated (`reputation.ReputationManager.update_reputation`).
@@ -200,8 +204,8 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 <summary><strong>Click to expand</strong></summary>
 
 1. CLI/Client sends `RESOLVE` packet via network.
-2. `AkitaServer.send_resolve_request()` → Reticulum broadcast.
-3. Server `AkitaServer._handle_incoming_packet()` receives packet.
+2. `AkitaServer.send_resolve()` → Reticulum broadcast.
+3. Server `AkitaServer._on_packet()` receives packet.
 4. Rate limit checked.
 5. Packet parsed.
 6. Check `storage.Cache` for result.
@@ -228,9 +232,9 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
    - Parses YAML.
    - Converts hex back to bytes.
    - Passes to `Registry.process_gossip()`.
-6. Verifies entries, timestamps, signatures, and ownership.
+6. Verifies entries, timestamps, signatures, and namespace-owner identity.
 7. Updates local registry if necessary.
-8. Updates sender's reputation.
+8. Leaves reputation updates to validated registration and namespace-owner events.
 
 </details>
 

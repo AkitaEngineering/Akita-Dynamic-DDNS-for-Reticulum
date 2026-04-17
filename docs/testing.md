@@ -1,192 +1,113 @@
-Of course! Here's the same Markdown version without any emojis, keeping it clean and professional:
-
----
-
 # Testing Akita DDNS
 
-Testing a decentralized, peer-to-peer application like **Akita DDNS** presents unique challenges compared to traditional client-server applications.  
-This document outlines the current status and future testing strategies for the project.
-
----
+Testing a decentralized, peer-to-peer system like Akita DDNS is different from testing a typical client-server application. Some logic can be covered well with unit tests, but live Reticulum behavior still needs manual or future integration coverage.
 
 ## Current Status
 
-- **Manual testing** is the primary method used during development.
-- **Basic unit tests** are implemented for utility functions (see `tests/test_utils.py`).
-- **No integration or end-to-end tests** are currently implemented.
+- Unit tests cover core helper and protocol-validation paths.
+- Manual multi-node testing is still required for real Reticulum network behavior.
+- Integration and end-to-end tests are not implemented yet.
 
----
+## What Is Covered Today
 
-## Testing Strategies
+The current automated suite exercises these areas:
 
-### 1. Manual Testing (Current Approach)
+- `config.load_config` path-sensitive reload behavior
+- `crypto.identity_from_public_key`
+- `crypto.verify_signature_with_public_key`
+- `network.AkitaServer._on_packet` dispatch behavior
+- `storage.Registry.process_gossip`
+- `utils.parse_name`
+- `utils.RateLimiter`
 
-Manually running multiple Akita nodes and interacting with them via CLI.
+Current test files:
 
-#### Setup Instructions
+- `tests/test_config.py`
+- `tests/test_crypto.py`
+- `tests/test_network.py`
+- `tests/test_storage.py`
+- `tests/test_utils.py`
 
-- **Multiple Terminals**: Open separate terminal windows.
-- **Separate Configurations**:  
-  Duplicate and slightly modify `akita_config.yaml` files to ensure:
-  - Shared `akita_namespace_identity_hash`
-  - Different `persistence_path` to avoid state conflicts
+## Running Unit Tests
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the suite:
+
+```bash
+pytest tests/
+```
+
+## Manual Multi-Node Testing
+
+Manual testing is the current way to validate peer-to-peer behavior across real Reticulum nodes.
+
+### Setup
+
+Use separate terminals and separate config files. Nodes that should participate in the same Akita network must share the same `akita_namespace_identity_hash`, but should use different persistence directories.
 
 ```bash
 # Terminal 1 (Node A)
 cp akita_config.yaml node_a_config.yaml
 # Edit node_a_config.yaml: persistence_path: ./akita_state_a
-python -m akita_ddns.main server --config node_a_config.yaml
+python -m akita_ddns.main --config node_a_config.yaml server
 
 # Terminal 2 (Node B)
 cp akita_config.yaml node_b_config.yaml
 # Edit node_b_config.yaml: persistence_path: ./akita_state_b
-python -m akita_ddns.main server --config node_b_config.yaml
+python -m akita_ddns.main --config node_b_config.yaml server
 
 # Terminal 3 (CLI interaction)
-# Use the default akita_config.yaml or another matching your setup
+# Use any matching config file for client operations
 ```
 
-> **Note**:  
-> `main.py` currently loads configuration from a default path.  
-> To fully support `--config`, minor code modifications or different working directories may be needed.
+### Suggested Scenarios
 
-#### Manual Testing Scenarios
+1. Registration: Register names on Node A, wait for gossip, and verify that Node B can resolve them.
+2. Resolution: Resolve names registered only on Node B from Node A.
+3. Updates: Change an existing registration on one node and verify that the newer value propagates.
+4. TTL expiry: Register a short-lived name and confirm it disappears after expiry with `cli list --registry`.
+5. Namespace ownership: Create a namespace on one node, verify another identity cannot publish into it, then verify the owner identity can.
+6. Persistence: Restart nodes and confirm non-expired state is still available through `cli list` or `cli resolve`.
+7. Rate limiting: Send repeated rapid requests and inspect logs for throttling behavior.
+8. Gossip consistency: Compare `cli list --registry` output across peers after gossip intervals.
+9. Local state inspection: Check `cli list --registry`, `cli list --namespaces`, and `cli list --reputation` during tests.
 
-- **Registration**  
-  - Register names on Node A.
-  - Wait for gossip interval.
-  - Verify if Node B resolves the names.
+## Integration Testing Goals
 
-- **Resolution**  
-  - Try resolving names registered only on Node B using Node A.
+Integration tests should eventually validate interactions between modules and the network layer without depending on a full external deployment.
 
-- **Updates**  
-  - Update a registration on Node A and verify propagation to Node B.
+Useful targets include:
 
-- **TTL Expiry**  
-  - Register a name with a short TTL.
-  - Wait for expiration and verify it’s removed using `cli list --registry`.
+- Register and resolve flows through mocked Reticulum destinations and packets
+- Gossip message exchange and merge behavior
+- Namespace creation and ownership enforcement
+- Cache and TTL behavior across module boundaries
 
-- **Namespace Creation and Ownership**  
-  - Create a namespace on Node A.
-  - Attempt and fail to register a name in that namespace from Node B.
-  - Register correctly with Node A’s identity and verify using `cli list --namespaces`.
+Recommended future location:
 
-- **Persistence Check**  
-  - Stop and restart nodes.
-  - Confirm that non-expired names persist via `cli list --registry` or `cli resolve`.
+- `tests/integration/`
 
-- **Rate Limiting**  
-  - Send rapid requests.
-  - Check logs for failures due to throttling.
+## End-to-End Testing Goals
 
-- **Gossip Observations**  
-  - Monitor logs for gossip messages.
-  - Inspect consistency across nodes with `cli list --registry`.
+End-to-end tests should exercise full application behavior in a controlled multi-node environment.
 
-- **CLI State Inspection**  
-  - Use commands:
-    - `cli list --registry`
-    - `cli list --namespaces`
-    - `cli list --reputation`
+Useful approaches include:
 
----
+- Containerized multi-node setups
+- Scripted CLI interactions
+- Assertions on visible outputs and persisted state
 
-### 1. Unit Testing
+Expected challenges:
 
-Basic unit tests are implemented for core utility functions.
-
-#### Running Tests
-
-Install test dependencies:
-
-    pip install pytest
-
-Run tests:
-
-    pytest tests/
-
-#### Key Focus Areas (Implemented)
-
-- `utils.parse_name`
-- `utils.RateLimiter`
-
-#### Key Focus Areas (Future)
-
-- `storage.Registry` (add, resolve, TTL expiry)
-- Cryptographic verification (signatures)
-- Configuration loading (`config.load_config`)
-
-#### Best Practices
-
-- Use `unittest` or `pytest`.
-- Apply mocking (`unittest.mock`) to simulate:
-  - Reticulum objects
-  - File I/O
-  - Network calls
-  - Time-related behavior
-
-#### Directory Structure
-
-- Create a `tests/` directory
-- Example files:
-  - `tests/test_storage.py`
-  - `tests/test_utils.py`
-
----
-
-### 3. Integration Testing (Future Goal)
-
-Testing interactions between modules and the network layer.
-
-#### Setup
-
-- Run multiple Akita instances in the same test process
-- Use different threads or asyncio tasks if necessary
-
-#### Network Mocking
-
-- Simulate Reticulum's Destination and Packet handling
-- Avoid real network traffic when possible
-
-#### Integration Scenarios
-
-- Registration flow
-- Resolution flow
-- Gossip message handling
-- Namespace creation and enforcement
-
-#### Directory Structure
-
-- Place integration tests under `tests/integration/`
-
----
-
-### 4. End-to-End (E2E) Testing (Future Goal)
-
-Full application tests in a controlled network environment.
-
-#### Tools and Approach
-
-- Use containerization (Docker) to run multiple nodes
-- Script CLI interactions
-- Validate expected outputs and behaviors
-
-#### Challenges
-
-- Complex setup
+- More complex environment setup
 - Longer execution time
-- Managing network conditions
-
----
+- Managing network timing and discovery behavior
 
 ## Conclusion
 
-Currently, manual testing is essential to Akita DDNS development.  
-Introducing unit tests for core logic such as parsing, storage manipulation, and cryptographic verification would be the most valuable next step to improve code quality and catch regressions.  
-Integration testing will further increase confidence in module interactions.  
-Meanwhile, using the `cli list` commands can assist with manual verification of persisted state.
-
----
-
-Would you like me to also create a second version that's even more minimalistic (like if you want it *even cleaner* for a developer-focused repo)?
+The current test suite is enough to validate the core non-network logic and several protocol assumptions that are easy to break. It is not enough to prove full live-network correctness across multiple Reticulum peers. Manual testing is still the right validation path for that until integration or end-to-end coverage is added.
