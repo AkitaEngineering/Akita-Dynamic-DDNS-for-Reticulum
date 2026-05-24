@@ -12,3 +12,5 @@ pyyaml>=5.4
 # Testing framework
 pytest>=7.0.0
 
+# Web UI Dashboard
+aiohttp>=3.8.0

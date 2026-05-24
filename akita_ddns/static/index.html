@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Akita DDNS Dashboard</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+        
+        :root {
+            --bg: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-hover: #0ea5e9;
+        }
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: 'Inter', system-ui, sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1000px;
+        }
+        h1 {
+            text-align: center;
+            font-weight: 300;
+            letter-spacing: 4px;
+            margin-bottom: 40px;
+            color: #fff;
+        }
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s;
+        }
+        .glass-panel:hover {
+            transform: translateY(-2px);
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: var(--accent);
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 12px;
+            font-weight: 500;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        th {
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+        }
+        tbody tr {
+            transition: background 0.2s;
+        }
+        tbody tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+        .timestamp {
+            font-family: monospace;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+        .badge {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent);
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        @media (max-width: 768px) {
+            .split-view {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>AKITA DDNS</h1>
+    
+    <div class="glass-panel">
+        <h2>Active Registry</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Namespace</th>
+                    <th>Name</th>
+                    <th>RID (Destination)</th>
+                    <th>Expires In</th>
+                </tr>
+            </thead>
+            <tbody id="registry-body">
+                <tr><td colspan="4" style="text-align:center; color: var(--text-muted);">Loading data...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="split-view" style="display: flex; gap: 24px;">
+        <div class="glass-panel" style="flex: 1;">
+            <h2>Namespaces</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Namespace</th>
+                        <th>Owner Identity</th>
+                    </tr>
+                </thead>
+                <tbody id="namespaces-body">
+                    <tr><td colspan="2" style="text-align:center; color: var(--text-muted);">Loading data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="glass-panel" style="flex: 1;">
+            <h2>Node Reputation</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Identity Hash</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody id="reputation-body">
+                    <tr><td colspan="2" style="text-align:center; color: var(--text-muted);">Loading data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    async function fetchData() {
+        try {
+            const [regRes, nsRes, repRes] = await Promise.all([
+                fetch('/api/registry').catch(() => null),
+                fetch('/api/namespaces').catch(() => null),
+                fetch('/api/reputation').catch(() => null)
+            ]);
+            
+            if (regRes && regRes.ok) {
+                const regData = await regRes.json();
+                const regBody = document.getElementById('registry-body');
+                regBody.innerHTML = '';
+                if (regData.length === 0) {
+                    regBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">No active entries</td></tr>';
+                } else {
+                    const now = Date.now() / 1000;
+                    regData.forEach(entry => {
+                        const expires = Math.max(0, Math.round(entry.expiration - now));
+                        regBody.innerHTML += `<tr>
+                            <td><span class="badge">${entry.namespace}</span></td>
+                            <td style="font-weight: 600; color: white;">${entry.name}</td>
+                            <td class="timestamp">${entry.rid}</td>
+                            <td>${expires}s</td>
+                        </tr>`;
+                    });
+                }
+            }
+
+            if (nsRes && nsRes.ok) {
+                const nsData = await nsRes.json();
+                const nsBody = document.getElementById('namespaces-body');
+                nsBody.innerHTML = '';
+                const nsKeys = Object.keys(nsData);
+                if (nsKeys.length === 0) {
+                    nsBody.innerHTML = '<tr><td colspan="2" style="text-align:center; color: var(--text-muted);">No namespaces</td></tr>';
+                } else {
+                    nsKeys.forEach(ns => {
+                        nsBody.innerHTML += `<tr>
+                            <td><span class="badge">${ns}</span></td>
+                            <td class="timestamp">${nsData[ns]}</td>
+                        </tr>`;
+                    });
+                }
+            }
+
+            if (repRes && repRes.ok) {
+                const repData = await repRes.json();
+                const repBody = document.getElementById('reputation-body');
+                repBody.innerHTML = '';
+                const repKeys = Object.keys(repData);
+                if (repKeys.length === 0) {
+                    repBody.innerHTML = '<tr><td colspan="2" style="text-align:center; color: var(--text-muted);">No reputation data</td></tr>';
+                } else {
+                    repKeys.sort((a,b) => repData[b] - repData[a]).forEach(hash => {
+                        repBody.innerHTML += `<tr>
+                            <td class="timestamp">${hash}</td>
+                            <td><span class="badge">${repData[hash]}</span></td>
+                        </tr>`;
+                    });
+                }
+            }
+        } catch (err) {
+            console.error('Error fetching data:', err);
+        }
+    }
+
+    fetchData();
+    setInterval(fetchData, 5000);
+</script>
+
+</body>
+</html>

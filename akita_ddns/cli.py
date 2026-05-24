@@ -121,6 +121,78 @@ def run_cli(args, config, r_instance):
         else:
              print("Failed to send.")
 
+    elif args.command == "revoke":
+        name, ns = parse_name(args.name, config["akita_namespace_identity_hash"])
+        rid_bytes = bytes.fromhex(args.rid) if args.rid else identity.hash
+        ttl = 1  # 1 second TTL means it overwrites the current record then immediately expires
+        timestamp = int(time.time())
+        
+        data = build_registration_payload(ns, name, rid_bytes.hex(), ttl, timestamp)
+        sig = generate_signature(data, identity)
+        if not sig:
+            print("Failed to sign revocation.")
+            return
+        pubkey_hex = identity.get_public_key().hex()
+        
+        msg = f"REGISTER:{ns}:{name}:{rid_bytes.hex()}:{identity.hash.hex()}:{pubkey_hex}:{sig.hex()}:{ttl}:{timestamp}".encode("utf-8")
+        if ret.Packet(sender, msg).send():
+            print(f"Revocation sent for {name}@{ns}")
+        else:
+            print("Failed to send revocation.")
+            
+    elif args.command == "transfer_namespace":
+        ns = args.namespace
+        new_owner = args.new_owner
+        data = f"NAMESPACE_TRANSFER:{ns}:{new_owner}".encode("utf-8")
+        sig = generate_signature(data, identity)
+        if not sig:
+            print("Failed to sign namespace transfer request.")
+            return
+        pubkey_hex = identity.get_public_key().hex()
+        msg = f"{data.decode()}:{pubkey_hex}:{sig.hex()}".encode("utf-8")
+        
+        if ret.Packet(sender, msg).send():
+             print(f"Namespace transfer sent for {ns} to {new_owner}")
+        else:
+             print("Failed to send.")
+
+    elif args.command == "watch":
+        name, ns = parse_name(args.name, config["akita_namespace_identity_hash"])
+        interval = args.interval
+        global _res_data, _response_identity_hash
+        _response_identity_hash = identity.hash.hex()
+        
+        listener = ret.Destination(
+            None,
+            ret.Destination.IN,
+            ret.Destination.PLAIN,
+            APP_NAME, "response"
+        )
+        listener.set_proof_strategy(ret.Destination.PROVE_NONE)
+        listener.set_packet_callback(_on_response)
+        
+        print(f"Watching {name}@{ns} every {interval}s (Ctrl+C to stop)...")
+        last_rid = None
+        
+        try:
+            while True:
+                msg = f"RESOLVE:{ns}:{name}:{identity.hash.hex()}".encode("utf-8")
+                _res_data = None
+                _res_event.clear()
+                
+                if ret.Packet(sender, msg).send():
+                    if _res_event.wait(5.0):
+                        if _res_data != last_rid:
+                            print(f"[{time.strftime('%H:%M:%S')}] {name}@{ns} resolved to: {_res_data}")
+                            last_rid = _res_data
+                    else:
+                        if last_rid is not None:
+                            print(f"[{time.strftime('%H:%M:%S')}] {name}@{ns} resolution timed out.")
+                            last_rid = None
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\nWatch stopped.")
+
     elif args.command == "list":
         # Import storage only here
         from .storage import PersistentStorage
@@ -151,6 +223,21 @@ def setup_cli_parser():
     ns = sp.add_parser("create_namespace")
     ns.add_argument("--namespace", required=True)
     ns.add_argument("--owner_identity")
+
+    rev = sp.add_parser("revoke")
+    rev.add_argument("--name", required=True)
+    rev.add_argument("--rid")
+    rev.add_argument("--identity")
+    
+    tns = sp.add_parser("transfer_namespace")
+    tns.add_argument("--namespace", required=True)
+    tns.add_argument("--new_owner", required=True)
+    tns.add_argument("--identity")
+
+    wat = sp.add_parser("watch")
+    wat.add_argument("--name", required=True)
+    wat.add_argument("--interval", type=int, default=10)
+    wat.add_argument("--identity")
     
     lst = sp.add_parser("list")
     lst.add_argument("--registry", action="store_true")

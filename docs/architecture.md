@@ -135,10 +135,11 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 <details>
 <summary><strong>Click to expand</strong></summary>
 
-- **AkitaServer:**
-  - Handles all Reticulum network operations.
-  - Listens for incoming Reticulum packets on an Akita broadcast destination.
-  - Uses `_on_packet()` to dispatch commands like `REGISTER`, `RESOLVE`, `GOSSIP`, and `NAMESPACE_CREATE`.
+- **Client Anycast Listener:** 
+  - Listens for incoming Reticulum packets on an un-identified `PLAIN` Akita destination. This allows local CLI clients to reach the nearest running Akita node automatically.
+- **Node-Specific Listener & P2P Gossip:**
+  - Nodes discover each other via Reticulum Announces and maintain a list of known peers.
+  - Nodes gossip updates by sending direct `SINGLE` packets to known peers.
   - Verifies message authenticity from signed payload data and embedded public keys.
   - Sends and receives protocol messages.
   - Runs background tasks like gossiping the registry and TTL checks.
@@ -184,9 +185,9 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 <details>
 <summary><strong>Click to expand</strong></summary>
 
-1. CLI/Client sends `REGISTER` packet (signed) via network.
-2. `AkitaServer.send_register()` → Reticulum broadcast.
-3. Server `AkitaServer._on_packet()` receives packet.
+1. CLI uses `ret.Packet` to send the payload to the Anycast destination (`APP_NAME, "broadcast"`).
+2. Reticulum routes this to the nearest active `AkitaServer` node.
+3. Node receives `REGISTER` packet.
 4. Rate limit checked (`utils.RateLimiter`).
 5. Packet parsed and signature verified from the embedded public key.
 6. Namespace ownership verified against the signer identity (`namespace.NamespaceManager.is_authorized`).
@@ -203,9 +204,9 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 <details>
 <summary><strong>Click to expand</strong></summary>
 
-1. CLI/Client sends `RESOLVE` packet via network.
-2. `AkitaServer.send_resolve()` → Reticulum broadcast.
-3. Server `AkitaServer._on_packet()` receives packet.
+1. CLI asks for resolution of `myname.mynamespace`.
+2. CLI sends `RESOLVE` packet to the Anycast destination.
+3. Nearest Node receives `RESOLVE` packet.
 4. Rate limit checked.
 5. Packet parsed.
 6. Check `storage.Cache` for result.
@@ -226,8 +227,8 @@ The codebase is organized into several Python modules inside the `akita_ddns` pa
 
 1. Server's `AkitaServer.run_gossip_loop()` periodically triggers.
 2. Gets valid registry entries via `Registry.get_registry_for_gossip()`.
-3. Serializes data to YAML (hex encoded).
-4. Sends `GOSSIP` packet → Reticulum broadcast.
+3. `network.py` serializes the dictionary to YAML.
+4. Sends `GOSSIP` packets directly to all discovered peer nodes.
 5. Receiving server handles packet:
    - Parses YAML.
    - Converts hex back to bytes.

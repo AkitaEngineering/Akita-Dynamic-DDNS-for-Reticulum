@@ -18,15 +18,16 @@ Akita DDNS uses RNS identities and application destinations to sign and distribu
 * **TTL (Time-to-Live):** Registrations automatically expire, ensuring stale entries are eventually removed.
 * **Persistence:** Optionally saves state (registry, namespaces, reputation) locally to survive restarts.
 * **Rate Limiting:** Basic protection against request flooding.
+* **Web UI Dashboard:** An embedded, responsive HTTP dashboard to view real-time mesh registry data.
 * **Reputation System:** Optional tracking of peer behavior to potentially prioritize reliable nodes (future enhancement).
 * **Modular Codebase:** Organized Python package for maintainability and extensibility.
-* **CLI Interface:** Command-line tool for easy interaction (register, resolve, manage namespaces, inspect local state).
+* **CLI Interface:** Command-line tool for easy interaction (register, resolve, watch, revoke, manage namespaces, inspect local state).
 
 
 ## Requirements
 - Python 3.7+
 
-See `requirements.txt` for specific Python package dependencies (`rns`, `pyyaml`, `pytest`).
+See `requirements.txt` for specific Python package dependencies (`rns`, `pyyaml`, `aiohttp`, `pytest`).
 
 ---
 
@@ -66,7 +67,7 @@ Ensure `akita_config.yaml` is present (or pass `--config <path>`). Then run:
 python -m akita_ddns.main --config akita_config.yaml server
 ```
 
-The server will initialize RNS, create/load an identity (if needed), listen for incoming messages, gossip registry entries, and perform periodic TTL checks.
+The server will initialize RNS, create/load an identity (if needed), start the Web UI dashboard on `127.0.0.1:48080`, discover peers via Announces, gossip registry entries, and perform periodic TTL checks.
 
 ### 2. Use the CLI:
 
@@ -81,6 +82,15 @@ python -m akita_ddns.main --config akita_config.yaml cli resolve --name mynode -
 
 # Create a namespace (signed by identity)
 python -m akita_ddns.main --config akita_config.yaml cli create_namespace --namespace home
+
+# Transfer a namespace to a new identity
+python -m akita_ddns.main --config akita_config.yaml cli transfer_namespace --namespace home --new_owner <NEW_HASH>
+
+# Revoke a registration early
+python -m akita_ddns.main --config akita_config.yaml cli revoke --name mynode
+
+# Watch a name continuously for changes
+python -m akita_ddns.main --config akita_config.yaml cli watch --name mynode.home --interval 5
 
 # Show persisted state (if persistence enabled)
 python -m akita_ddns.main --config akita_config.yaml cli list --registry --namespaces --reputation

@@ -12,9 +12,6 @@ storage_path: "~/.config/reticulum"
 # If left blank or commented out, an ephemeral one is generated (only for isolated testing).
 akita_namespace_identity_hash: "ebbf5138cd8d432fd2eba7a528347838" # <--- REPLACE THIS
 
-# UDP Port for Akita service discovery and communication via Reticulum's AutoInterface.
-# Ensure this port is open/forwarded if needed for nodes on different networks.
-akita_port: 48000
 
 # --- Timing Settings (seconds) ---
 
@@ -58,3 +55,8 @@ persistence_path: "./akita_state"
 namespace_owners_file: "namespaces.yaml"
 registry_file: "registry.yaml"
 reputation_file: "reputation.yaml"
+
+# --- Web UI Settings ---
+web_ui_enabled: true
+web_ui_host: "127.0.0.1"
+web_ui_port: 48080

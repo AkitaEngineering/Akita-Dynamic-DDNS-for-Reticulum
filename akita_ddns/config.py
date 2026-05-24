@@ -10,7 +10,6 @@ from typing import Dict, Any, Optional
 DEFAULT_CONFIG = {
     "storage_path": os.path.expanduser("~/.config/reticulum"),
     "akita_namespace_identity_hash": None,
-    "akita_port": 48000,
     "update_interval": 3600,
     "cache_ttl": 300,
     "log_level": "INFO",
@@ -24,6 +23,9 @@ DEFAULT_CONFIG = {
     "namespace_owners_file": "namespaces.yaml",
     "registry_file": "registry.yaml",
     "reputation_file": "reputation.yaml",
+    "web_ui_enabled": True,
+    "web_ui_host": "127.0.0.1",
+    "web_ui_port": 48080,
 }
 
 _config: Dict[str, Any] = {}
@@ -91,8 +93,8 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
                 log.warning(f"No network hash configured. Generated ephemeral: {effective_config['akita_namespace_identity_hash']}")
 
             # Numeric Types
-            for key in ["akita_port", "update_interval", "cache_ttl", "max_cache_size",
-                        "gossip_interval", "ttl_check_interval", "default_ttl"]:
+            for key in ["update_interval", "cache_ttl", "max_cache_size",
+                        "gossip_interval", "ttl_check_interval", "default_ttl", "web_ui_port"]:
                 try:
                     effective_config[key] = int(effective_config.get(key, DEFAULT_CONFIG[key]))
                 except (ValueError, TypeError):
@@ -127,6 +129,10 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
                 effective_config["namespace_owners_file_path"] = None
                 effective_config["registry_file_path"] = None
                 effective_config["reputation_file_path"] = None
+
+            # Web UI
+            effective_config["web_ui_enabled"] = bool(effective_config.get("web_ui_enabled", True))
+            effective_config["web_ui_host"] = str(effective_config.get("web_ui_host", "127.0.0.1"))
 
             # Logging Level
             log_level_str = str(effective_config.get("log_level", "INFO")).upper()

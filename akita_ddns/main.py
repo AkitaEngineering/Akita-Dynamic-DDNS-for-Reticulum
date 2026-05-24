@@ -21,6 +21,7 @@ from .utils import load_or_create_identity
 from .reputation import ReputationManager
 from .network import AkitaServer
 from .cli import setup_cli_parser, run_cli
+from .web_ui import WebUI
 
 # Logging
 logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(message)s")
@@ -56,6 +57,12 @@ async def main_server_loop():
     server = AkitaServer(r, reg, cache, ns, rep, i)
     server_ref = server
     
+    # Web UI
+    web_ui = None
+    if config.get("web_ui_enabled", True):
+        web_ui = WebUI(config, server, reg, ns, rep)
+        await web_ui.start()
+    
     # Tasks
     t1 = asyncio.create_task(server.run_gossip_loop())
     t2 = asyncio.create_task(server.run_periodic_tasks())
@@ -66,6 +73,8 @@ async def main_server_loop():
     await stop_event.wait()
     
     # Cleanup
+    if web_ui:
+        await web_ui.stop()
     t1.cancel()
     t2.cancel()
     try: await t1; 

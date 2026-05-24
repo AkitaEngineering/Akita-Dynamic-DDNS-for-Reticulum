@@ -98,8 +98,17 @@ class Registry:
         with self._lock:
             entry = (rid, ts, sig, exp, public_key)
             curr = self._registry.get(ns, {}).get(name)
-            # Optimization: don't save if identical
-            if curr and curr[0] == rid and curr[2] == sig and curr[3] == exp and curr[4] == public_key: return True
+            
+            if curr:
+                # Optimization: don't save if identical
+                if curr[0] == rid and curr[2] == sig and curr[3] == exp and curr[4] == public_key: 
+                    return True
+                
+                # Prevent rollback: reject if the new timestamp is older, or identical but doesn't extend TTL
+                if ts < curr[1]:
+                    return False
+                if ts == curr[1] and exp <= curr[3]:
+                    return False
             
             self._registry.setdefault(ns, {})[name] = entry
             log.info(f"Registered {name}@{ns} -> {rid.hex()}")
@@ -138,8 +147,7 @@ class Registry:
                     ttl = int(exp - ts)
                     if ttl < 0: ttl = 0
                     payload = build_registration_payload(ns, name, rid.hex(), ttl, int(ts))
-                    legacy_payload = build_registration_payload(ns, name, rid.hex(), ttl)
-                    if not verify_signature_with_public_key(payload, sig, pubkey) and not verify_signature_with_public_key(legacy_payload, sig, pubkey):
+                    if not verify_signature_with_public_key(payload, sig, pubkey):
                         continue
 
                     # Update logic

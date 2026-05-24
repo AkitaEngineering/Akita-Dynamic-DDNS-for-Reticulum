@@ -37,9 +37,11 @@ cd /path/to/akita-ddns
 # Run the server module
 python -m akita_ddns.main --config akita_config.yaml server
 ```
-The server will initialize Reticulum, load persisted state when enabled, listen for Akita protocol packets, and start the periodic gossip and TTL maintenance loops.
+The server will initialize Reticulum, load persisted state when enabled, start the Web UI dashboard on `127.0.0.1:48080`, listen for Akita protocol packets, and start the periodic gossip and TTL maintenance loops.
 
 Leave this running in its own terminal or as a background process.
+
+You can view the real-time node state by visiting `http://127.0.0.1:48080` in your browser.
 
 </details>
 
@@ -107,9 +109,28 @@ Adjusting timeout:
 python -m akita_ddns.main --config akita_config.yaml cli resolve --name far-away-node.remote --timeout 10
 ```
 
+Watching a name continuously for changes:
+
+```bash
+python -m akita_ddns.main --config akita_config.yaml cli watch --name far-away-node.remote --interval 5
+```
+
 </details>
 
-### 2.3. Creating a Namespace
+### 2.3. Revoking a Name
+
+<details>
+<summary><strong>Click to expand name revocation examples</strong></summary>
+
+You can force a name to instantly expire across the network by broadcasting a revocation.
+
+```bash
+python -m akita_ddns.main --config akita_config.yaml cli revoke --name mycomputer
+```
+
+</details>
+
+### 2.4. Creating and Managing Namespaces
 
 <details>
 <summary><strong>Click to expand namespace creation examples</strong></summary>
@@ -126,9 +147,15 @@ Using a specific owner identity:
 python -m akita_ddns.main --config akita_config.yaml cli create_namespace --namespace secure --owner_identity ~/.config/reticulum/identities/admin_id
 ```
 
+Transferring namespace ownership to a new Identity Hash:
+
+```bash
+python -m akita_ddns.main --config akita_config.yaml cli transfer_namespace --namespace secure --new_owner 4d284...
+```
+
 </details>
 
-### 2.4. Listing Local State
+### 2.5. Listing Local State
 
 <details>
 <summary><strong>Click to expand state listing examples</strong></summary>

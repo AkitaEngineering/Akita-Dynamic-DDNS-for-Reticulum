@@ -29,7 +29,7 @@ class NamespaceManager:
         with self._lock:
             curr = self._owners.get(ns)
             if curr:
-                return curr == owner.hex()
+                return False
             
             self._owners[ns] = owner.hex()
             log.info(f"Created namespace {ns} owner {owner.hex()}")
@@ -44,3 +44,25 @@ class NamespaceManager:
 
     def get_owners(self) -> Dict[str, str]:
         with self._lock: return self._owners.copy()
+
+    def transfer_namespace(self, ns: str, old_owner_pubkey: bytes, new_owner: bytes, sig: bytes) -> bool:
+        if not ns: return False
+        
+        # Verify Sig
+        payload = f"NAMESPACE_TRANSFER:{ns}:{new_owner.hex()}".encode("utf-8")
+        identity = identity_from_public_key(old_owner_pubkey)
+        if not identity:
+            return False
+        if not verify_signature_with_public_key(payload, sig, old_owner_pubkey):
+            log.warning(f"Invalid signature for namespace transfer {ns}")
+            return False
+
+        with self._lock:
+            curr = self._owners.get(ns)
+            if not curr or curr != identity.hash.hex():
+                return False # Not the owner or doesn't exist
+            
+            self._owners[ns] = new_owner.hex()
+            log.info(f"Transferred namespace {ns} from {identity.hash.hex()} to {new_owner.hex()}")
+            self.storage.save_namespaces(self._owners)
+            return True
