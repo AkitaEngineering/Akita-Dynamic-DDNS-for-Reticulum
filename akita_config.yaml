@@ -8,32 +8,41 @@ storage_path: "~/.config/reticulum"
 
 # IMPORTANT: The Identity hash defining THIS Akita DDNS network.
 # All nodes participating in the *same* DDNS must use the *same* hash.
-# Generate one using: python -c "import RNS as ret; print(ret.Identity().hash.hex())"
-# If left blank or commented out, an ephemeral one is generated (only for isolated testing).
-akita_namespace_identity_hash: "ebbf5138cd8d432fd2eba7a528347838" # <--- REPLACE THIS
+# Generate and retain the authority using:
+# python -c "import RNS as r; i=r.Identity(); i.to_file('akita-network-authority'); print(i.hash.hex())"
+# If null, this node's persisted identity hash is used (single-node/local deployments only).
+akita_namespace_identity_hash: null
 
 
 # --- Timing Settings (seconds) ---
 
-# Base interval for nodes to re-announce their registered names. Jitter is added automatically.
-update_interval: 3600 # 1 hour
-
 # Default time-to-live for registrations if not specified by the client.
 default_ttl: 86400 # 1 day
 
+# Maximum accepted TTL and allowed sender clock skew.
+max_registration_ttl: 604800 # 7 days
+max_clock_skew: 300
+
 # Base interval for gossiping registry information. Jitter is added automatically.
 gossip_interval: 120 # 2 minutes
+peer_ttl: 900
+max_gossip_entries_per_cycle: 100
 
 # How often the node checks its local registry for expired entries.
-ttl_check_interval: 600 # 10 minutes
+ttl_check_interval: 60
 
 # How long resolved names stay in the local cache.
 cache_ttl: 300 # 5 minutes
 
 # --- Performance & Limits ---
 
-# Maximum number of entries in the resolution cache *per namespace*.
+# Global in-memory and registry limits.
 max_cache_size: 1000
+max_registry_size: 10000
+max_namespaces: 1000
+
+# Safe default: registrations are accepted only in a claimed namespace.
+allow_unowned_namespaces: false
 
 # Max incoming requests per second (token bucket rate) before dropping packets.
 rate_limit_requests_per_sec: 10.0
@@ -50,6 +59,7 @@ persist_state: true
 
 # Directory to store persistent state files.
 persistence_path: "./akita_state"
+max_state_file_bytes: 16777216
 
 # Filenames for persistence within persistence_path.
 namespace_owners_file: "namespaces.yaml"
@@ -60,3 +70,7 @@ reputation_file: "reputation.yaml"
 web_ui_enabled: true
 web_ui_host: "127.0.0.1"
 web_ui_port: 48080
+web_ui_allow_mutations: false
+# Prefer the AKITA_WEB_UI_API_TOKEN environment variable when enabling mutations.
+web_ui_api_token: null
+web_ui_max_request_bytes: 16384

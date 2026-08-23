@@ -1,117 +1,148 @@
-# akita_ddns/main.py
-import sys
+"""Application entry point."""
+
 import argparse
 import asyncio
 import logging
-import signal
 import os
+import signal
+import sys
+from typing import Optional
 
-# Try importing Reticulum
 try:
     import RNS as ret
 except ImportError:
-    print("Reticulum not found. Install it via pip.")
-    sys.exit(1)
+    print("Reticulum not found. Install the project dependencies.", file=sys.stderr)
+    raise SystemExit(1)
 
-# Local Imports
-from .config import load_config, get_config
-from .storage import PersistentStorage, Registry, Cache
+from .cli import run_cli, setup_cli_parser
+from .config import ensure_network_id, load_config
 from .namespace import NamespaceManager
-from .utils import load_or_create_identity
-from .reputation import ReputationManager
 from .network import AkitaServer
-from .cli import setup_cli_parser, run_cli
-from .web_ui import WebUI
+from .reputation import ReputationManager
+from .storage import Cache, PersistentStorage, Registry
+from .utils import load_or_create_identity
 
-# Logging
-logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("akita_ddns")
+stop_event: Optional[asyncio.Event] = None
+server_ref: Optional[AkitaServer] = None
 
-stop_event = asyncio.Event()
-server_ref = None
 
-def sig_handler(sig, frame):
+def sig_handler(sig, frame) -> None:
     log.info("Stopping...")
-    stop_event.set()
-    if server_ref: server_ref.shutdown()
+    if server_ref:
+        server_ref.shutdown()
+    if stop_event:
+        stop_event.set()
 
-async def main_server_loop():
-    global server_ref
-    config = get_config()
-    
-    # Init Reticulum
-    r = ret.Reticulum(configdir=config["storage_path"])
-    
-    # Identity
+
+async def main_server_loop(config) -> None:
+    global server_ref, stop_event
+    stop_event = asyncio.Event()
+    reticulum = ret.Reticulum(configdir=config["storage_path"])
     identity_path = os.path.join(config["storage_path"], "akita_identity")
-    i = load_or_create_identity(identity_path)
-    log.info(f"Using identity: {i.hash.hex()}")
+    identity = load_or_create_identity(identity_path)
+    ensure_network_id(config, identity)
+    log.info(
+        "Using node identity %s on network %s",
+        identity.hash.hex(),
+        config["akita_namespace_identity_hash"],
+    )
+    if stop_event.is_set():
+        return
 
-    # Components
     storage = PersistentStorage(config)
-    reg = Registry(storage, config)
+    registry = Registry(storage, config)
     cache = Cache(config)
-    ns = NamespaceManager(storage, config)
-    rep = ReputationManager(storage, config)
-    
-    server = AkitaServer(r, reg, cache, ns, rep, i)
+    namespace_manager = NamespaceManager(storage, config)
+    reputation_manager = ReputationManager(storage, config)
+    registry.reconcile_namespace_owners(
+        namespace_manager.get_owners(), config["allow_unowned_namespaces"]
+    )
+    server = AkitaServer(
+        reticulum,
+        registry,
+        cache,
+        namespace_manager,
+        reputation_manager,
+        identity,
+    )
     server_ref = server
-    
-    # Web UI
     web_ui = None
-    if config.get("web_ui_enabled", True):
-        web_ui = WebUI(config, server, reg, ns, rep)
-        await web_ui.start()
-    
-    # Tasks
-    t1 = asyncio.create_task(server.run_gossip_loop())
-    t2 = asyncio.create_task(server.run_periodic_tasks())
-    
-    log.info("Server Running. Ctrl+C to exit.")
-    
-    # Wait for exit signal
-    await stop_event.wait()
-    
-    # Cleanup
-    if web_ui:
-        await web_ui.stop()
-    t1.cancel()
-    t2.cancel()
-    try: await t1; 
-    except asyncio.CancelledError: pass
-    try: await t2; 
-    except asyncio.CancelledError: pass
-    
+    tasks = []
+    try:
+        if config["web_ui_enabled"]:
+            from .web_ui import WebUI
 
-def main():
-    # Load config first
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="Path to config file", default="akita_config.yaml")
+            web_ui = WebUI(
+                config, server, registry, namespace_manager, reputation_manager
+            )
+            await web_ui.start()
+        tasks = [
+            asyncio.create_task(server.run_gossip_loop(), name="akita-gossip"),
+            asyncio.create_task(server.run_periodic_tasks(), name="akita-maintenance"),
+        ]
+        log.info("Server running. Press Ctrl+C to exit.")
+        await stop_event.wait()
+    finally:
+        server.shutdown()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if web_ui:
+            await web_ui.stop()
+        server_ref = None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", default="akita_config.yaml")
     parser.add_argument("mode", choices=["server", "cli"], nargs="?", default="server")
-    
-    # Parse mode first
-    args, rem = parser.parse_known_args()
-    
-    try: load_config(args.config)
-    except Exception as e:
-        print(f"Config Error: {e}")
-        sys.exit(1)
-    
+    args, remaining = parser.parse_known_args()
+
+    if args.mode == "server" and remaining in (["-h"], ["--help"]):
+        print("usage: akita-ddns [--config PATH] {server,cli} ...")
+        return 0
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
+
     if args.mode == "server":
+        if remaining:
+            print(
+                f"Unrecognized server argument(s): {' '.join(remaining)}",
+                file=sys.stderr,
+            )
+            return 2
         signal.signal(signal.SIGINT, sig_handler)
         signal.signal(signal.SIGTERM, sig_handler)
-        asyncio.run(main_server_loop())
-    else:
-        # CLI Mode
-        sys.argv = [sys.argv[0]] + rem
-        cp = setup_cli_parser()
-        c_args = cp.parse_args()
-        
-        # Reticulum for CLI (minimal logging)
-        logging.getLogger().setLevel(logging.CRITICAL)
-        r = ret.Reticulum(configdir=get_config()["storage_path"])
-        
-        run_cli(c_args, get_config(), r)
+        try:
+            asyncio.run(main_server_loop(config))
+            return 0
+        except KeyboardInterrupt:
+            return 130
+        except Exception:
+            log.exception("Server terminated unexpectedly")
+            return 1
+
+    cli_parser = setup_cli_parser()
+    cli_args = cli_parser.parse_args(remaining)
+    try:
+        default_identity = load_or_create_identity(
+            os.path.join(config["storage_path"], "akita_identity")
+        )
+        ensure_network_id(config, default_identity)
+        if cli_args.command == "list":
+            return run_cli(cli_args, config)
+        reticulum = ret.Reticulum(configdir=config["storage_path"])
+        return run_cli(cli_args, config, reticulum)
+    except Exception as exc:
+        print(f"Client startup error: {exc}", file=sys.stderr)
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

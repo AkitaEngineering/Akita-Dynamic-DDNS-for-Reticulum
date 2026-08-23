@@ -1,31 +1,42 @@
-# akita_ddns/config.py
-import yaml
-import os
-import logging
-import RNS as ret
-import threading
-from typing import Dict, Any, Optional
+"""Configuration loading and validation."""
 
-# --- Default Configuration Values ---
-DEFAULT_CONFIG = {
-    "storage_path": os.path.expanduser("~/.config/reticulum"),
+import logging
+import os
+import threading
+from typing import Any, Dict, Optional
+
+import RNS as ret
+import yaml
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "storage_path": "~/.config/reticulum",
     "akita_namespace_identity_hash": None,
-    "update_interval": 3600,
     "cache_ttl": 300,
     "log_level": "INFO",
     "max_cache_size": 1000,
+    "max_registry_size": 10000,
+    "max_namespaces": 1000,
+    "allow_unowned_namespaces": False,
+    "max_registration_ttl": 604800,
+    "max_clock_skew": 300,
+    "max_gossip_entries_per_cycle": 100,
     "gossip_interval": 120,
-    "ttl_check_interval": 600,
+    "peer_ttl": 900,
+    "ttl_check_interval": 60,
     "default_ttl": 86400,
     "rate_limit_requests_per_sec": 10.0,
     "persist_state": True,
     "persistence_path": "./akita_state",
+    "max_state_file_bytes": 16 * 1024 * 1024,
     "namespace_owners_file": "namespaces.yaml",
     "registry_file": "registry.yaml",
     "reputation_file": "reputation.yaml",
     "web_ui_enabled": True,
     "web_ui_host": "127.0.0.1",
     "web_ui_port": 48080,
+    "web_ui_allow_mutations": False,
+    "web_ui_api_token": None,
+    "web_ui_max_request_bytes": 16384,
 }
 
 _config: Dict[str, Any] = {}
@@ -33,122 +44,243 @@ _config_loaded = False
 _loaded_config_path: Optional[str] = None
 _load_lock = threading.Lock()
 
-# Initial basic logging
-logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+logging.basicConfig(
+    level="INFO", format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
 log = logging.getLogger(__name__)
 
+
+class ConfigurationError(ValueError):
+    """Raised when configuration is unsafe or invalid."""
+
+
+def _as_bool(value: Any, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    raise ConfigurationError(f"{key} must be a boolean")
+
+
+def _as_int(value: Any, key: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise ConfigurationError(f"{key} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(f"{key} must be an integer") from exc
+    if not minimum <= parsed <= maximum:
+        raise ConfigurationError(f"{key} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _as_float(value: Any, key: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise ConfigurationError(f"{key} must be a number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(f"{key} must be a number") from exc
+    if not minimum <= parsed <= maximum:
+        raise ConfigurationError(f"{key} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _resolve_path(value: Any, config_dir: str, key: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(f"{key} must be a non-empty path")
+    path = os.path.expanduser(value.strip())
+    if not os.path.isabs(path):
+        path = os.path.join(config_dir, path)
+    return os.path.abspath(path)
+
+
+def _validate_filename(value: Any, key: str) -> str:
+    if not isinstance(value, str) or not value or value != os.path.basename(value):
+        raise ConfigurationError(
+            f"{key} must be a filename without directory components"
+        )
+    return value
+
+
 def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
-    """Loads, validates, and returns the configuration."""
+    """Load one YAML configuration file and fail fast on unsafe values."""
     global _config, _config_loaded, _loaded_config_path
+    normalized_path = os.path.abspath(os.path.expanduser(config_path))
+
     with _load_lock:
-        normalized_config_path = os.path.abspath(os.path.expanduser(config_path))
-        if _config_loaded and _loaded_config_path == normalized_config_path:
+        if _config_loaded and _loaded_config_path == normalized_path:
             return _config
 
-        loaded_config = {}
-        effective_config = DEFAULT_CONFIG.copy()
-
-        log.info(f"Loading configuration from: {normalized_config_path}")
-        if os.path.exists(normalized_config_path):
+        loaded: Dict[str, Any] = {}
+        if os.path.exists(normalized_path):
             try:
-                with open(normalized_config_path, "r") as f:
-                    loaded_config = yaml.safe_load(f)
-                    if isinstance(loaded_config, dict):
-                        effective_config.update(loaded_config)
-                    else:
-                        log.warning(f"Config file '{normalized_config_path}' invalid. Using defaults.")
-            except Exception as e:
-                log.error(f"Error loading config file: {e}. Using defaults.")
+                with open(normalized_path, "r", encoding="utf-8") as handle:
+                    raw = yaml.safe_load(handle)
+            except (OSError, yaml.YAMLError) as exc:
+                raise ConfigurationError(
+                    f"Could not load {normalized_path}: {exc}"
+                ) from exc
+            if raw is not None and not isinstance(raw, dict):
+                raise ConfigurationError("Configuration root must be a mapping")
+            loaded = raw or {}
         else:
-            log.info(f"Config file '{normalized_config_path}' not found. Using defaults.")
+            log.warning(
+                "Configuration file %s was not found; using safe defaults",
+                normalized_path,
+            )
 
-        # --- Validation & Setup ---
-        try:
-            # Storage Path
-            storage_path = effective_config.get("storage_path", DEFAULT_CONFIG["storage_path"])
-            effective_config["storage_path"] = os.path.expanduser(str(storage_path))
-            if not os.path.isdir(effective_config["storage_path"]):
-                try:
-                    os.makedirs(effective_config["storage_path"], exist_ok=True)
-                    log.info(f"Created Reticulum storage: {effective_config['storage_path']}")
-                except Exception as e:
-                    log.error(f"Failed to create storage dir: {e}")
+        unknown = sorted(set(loaded) - set(DEFAULT_CONFIG))
+        if unknown:
+            raise ConfigurationError(
+                f"Unknown configuration option(s): {', '.join(unknown)}"
+            )
 
-            ns_hash_str = effective_config.get("akita_namespace_identity_hash")
-            if ns_hash_str:
-                try:
-                    ns_hash_bytes = bytes.fromhex(str(ns_hash_str))
-                    hash_len_bits = getattr(ret.Identity, "TRUNCATED_HASHLENGTH", None)
-                    if hash_len_bits is None:
-                        hash_len_bits = getattr(ret.Identity, "HASHLENGTH", 256)
-                    if len(ns_hash_bytes) != int(hash_len_bits) // 8:
-                        raise ValueError("Invalid hash length")
-                    effective_config["akita_namespace_identity_hash"] = str(ns_hash_str)
-                    log.info(f"Network Hash: {ns_hash_str}")
-                except (ValueError, TypeError) as e:
-                    log.error(f"Invalid network hash in config: {e}. Generating ephemeral.")
-                    effective_config["akita_namespace_identity_hash"] = ret.Identity().hash.hex()
-            else:
-                effective_config["akita_namespace_identity_hash"] = ret.Identity().hash.hex()
-                log.warning(f"No network hash configured. Generated ephemeral: {effective_config['akita_namespace_identity_hash']}")
+        cfg = {**DEFAULT_CONFIG, **loaded}
+        config_dir = os.path.dirname(normalized_path)
+        cfg["storage_path"] = _resolve_path(
+            cfg["storage_path"], config_dir, "storage_path"
+        )
+        cfg["persistence_path"] = _resolve_path(
+            cfg["persistence_path"], config_dir, "persistence_path"
+        )
 
-            # Numeric Types
-            for key in ["update_interval", "cache_ttl", "max_cache_size",
-                        "gossip_interval", "ttl_check_interval", "default_ttl", "web_ui_port"]:
-                try:
-                    effective_config[key] = int(effective_config.get(key, DEFAULT_CONFIG[key]))
-                except (ValueError, TypeError):
-                    effective_config[key] = DEFAULT_CONFIG[key]
-            
+        integer_limits = {
+            "cache_ttl": (1, 86400),
+            "max_cache_size": (1, 1_000_000),
+            "max_registry_size": (1, 1_000_000),
+            "max_namespaces": (1, 100_000),
+            "max_registration_ttl": (1, 31_536_000),
+            "max_clock_skew": (0, 86400),
+            "max_gossip_entries_per_cycle": (1, 10000),
+            "gossip_interval": (1, 86400),
+            "peer_ttl": (2, 604800),
+            "ttl_check_interval": (1, 86400),
+            "default_ttl": (1, 31_536_000),
+            "max_state_file_bytes": (1024, 1024 * 1024 * 1024),
+            "web_ui_port": (1, 65535),
+            "web_ui_max_request_bytes": (1024, 1024 * 1024),
+        }
+        for key, (minimum, maximum) in integer_limits.items():
+            cfg[key] = _as_int(cfg[key], key, minimum, maximum)
+
+        if cfg["default_ttl"] > cfg["max_registration_ttl"]:
+            raise ConfigurationError("default_ttl cannot exceed max_registration_ttl")
+        if cfg["peer_ttl"] <= cfg["gossip_interval"]:
+            raise ConfigurationError("peer_ttl must be greater than gossip_interval")
+
+        cfg["rate_limit_requests_per_sec"] = _as_float(
+            cfg["rate_limit_requests_per_sec"],
+            "rate_limit_requests_per_sec",
+            0.01,
+            100000.0,
+        )
+        for key in (
+            "persist_state",
+            "allow_unowned_namespaces",
+            "web_ui_enabled",
+            "web_ui_allow_mutations",
+        ):
+            cfg[key] = _as_bool(cfg[key], key)
+
+        network_hash = cfg["akita_namespace_identity_hash"]
+        if network_hash is not None:
+            if not isinstance(network_hash, str):
+                raise ConfigurationError(
+                    "akita_namespace_identity_hash must be hexadecimal"
+                )
             try:
-                 effective_config["rate_limit_requests_per_sec"] = float(effective_config.get("rate_limit_requests_per_sec", 10.0))
-            except (ValueError, TypeError):
-                 effective_config["rate_limit_requests_per_sec"] = 10.0
+                decoded_hash = bytes.fromhex(network_hash)
+            except ValueError as exc:
+                raise ConfigurationError(
+                    "akita_namespace_identity_hash must be hexadecimal"
+                ) from exc
+            hash_length = int(getattr(ret.Identity, "TRUNCATED_HASHLENGTH", 128)) // 8
+            if len(decoded_hash) != hash_length:
+                raise ConfigurationError(
+                    f"akita_namespace_identity_hash must contain {hash_length * 2} hex characters"
+                )
+            cfg["akita_namespace_identity_hash"] = decoded_hash.hex()
 
-            # Persistence Paths
-            effective_config["persist_state"] = bool(effective_config.get("persist_state", True))
-            if effective_config["persist_state"]:
-                p_path = os.path.expanduser(str(effective_config.get("persistence_path", "./akita_state")))
-                effective_config["persistence_path"] = p_path
-                if not os.path.isdir(p_path):
-                    try:
-                        os.makedirs(p_path, exist_ok=True)
-                    except Exception as e:
-                        log.error(f"Failed to create persistence dir: {e}. Disabling persistence.")
-                        effective_config["persist_state"] = False
-                
-                if effective_config["persist_state"]:
-                    effective_config["namespace_owners_file_path"] = os.path.join(p_path, effective_config.get("namespace_owners_file", "namespaces.yaml"))
-                    effective_config["registry_file_path"] = os.path.join(p_path, effective_config.get("registry_file", "registry.yaml"))
-                    effective_config["reputation_file_path"] = os.path.join(p_path, effective_config.get("reputation_file", "reputation.yaml"))
-                else:
-                    effective_config["namespace_owners_file_path"] = None
-                    effective_config["registry_file_path"] = None
-                    effective_config["reputation_file_path"] = None
-            else:
-                effective_config["namespace_owners_file_path"] = None
-                effective_config["registry_file_path"] = None
-                effective_config["reputation_file_path"] = None
+        log_level = str(cfg["log_level"]).upper()
+        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ConfigurationError(
+                "log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
+            )
+        cfg["log_level"] = log_level
 
-            # Web UI
-            effective_config["web_ui_enabled"] = bool(effective_config.get("web_ui_enabled", True))
-            effective_config["web_ui_host"] = str(effective_config.get("web_ui_host", "127.0.0.1"))
+        host = cfg["web_ui_host"]
+        if not isinstance(host, str) or not host.strip():
+            raise ConfigurationError("web_ui_host must be a non-empty string")
+        cfg["web_ui_host"] = host.strip()
+        environment_token = os.environ.get("AKITA_WEB_UI_API_TOKEN")
+        if environment_token:
+            cfg["web_ui_api_token"] = environment_token
+        token = cfg["web_ui_api_token"]
+        if token is not None and (not isinstance(token, str) or len(token) < 32):
+            raise ConfigurationError(
+                "web_ui_api_token must contain at least 32 characters"
+            )
+        if cfg["web_ui_allow_mutations"] and not token:
+            raise ConfigurationError(
+                "web_ui_api_token is required when web_ui_allow_mutations is enabled"
+            )
 
-            # Logging Level
-            log_level_str = str(effective_config.get("log_level", "INFO")).upper()
-            log_level_int = getattr(logging, log_level_str, logging.INFO)
-            logging.getLogger().setLevel(log_level_int)
-            for handler in logging.getLogger().handlers:
-                handler.setLevel(log_level_int)
-            
-        except Exception as e:
-             log.critical(f"Config validation failed: {e}", exc_info=True)
-             raise
+        for key in ("namespace_owners_file", "registry_file", "reputation_file"):
+            cfg[key] = _validate_filename(cfg[key], key)
 
-        _config = effective_config
+        try:
+            os.makedirs(cfg["storage_path"], mode=0o700, exist_ok=True)
+            if cfg["persist_state"]:
+                os.makedirs(cfg["persistence_path"], mode=0o700, exist_ok=True)
+        except OSError as exc:
+            raise ConfigurationError(
+                f"Could not create configured storage directory: {exc}"
+            ) from exc
+
+        if cfg["persist_state"]:
+            cfg["namespace_owners_file_path"] = os.path.join(
+                cfg["persistence_path"], cfg["namespace_owners_file"]
+            )
+            cfg["registry_file_path"] = os.path.join(
+                cfg["persistence_path"], cfg["registry_file"]
+            )
+            cfg["reputation_file_path"] = os.path.join(
+                cfg["persistence_path"], cfg["reputation_file"]
+            )
+        else:
+            cfg["namespace_owners_file_path"] = None
+            cfg["registry_file_path"] = None
+            cfg["reputation_file_path"] = None
+
+        level = getattr(logging, log_level)
+        logging.getLogger().setLevel(level)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(level)
+
+        _config = cfg
         _config_loaded = True
-        _loaded_config_path = normalized_config_path
+        _loaded_config_path = normalized_path
         return _config
+
+
+def ensure_network_id(config: Dict[str, Any], identity: ret.Identity) -> str:
+    """Use the persisted node identity as a stable single-node network ID if omitted."""
+    configured = config.get("akita_namespace_identity_hash")
+    if configured:
+        return str(configured)
+    configured = identity.hash.hex()
+    config["akita_namespace_identity_hash"] = configured
+    log.warning(
+        "No shared network ID was configured; using this node's stable identity hash %s",
+        configured,
+    )
+    return configured
+
 
 def get_config() -> Dict[str, Any]:
     if not _config_loaded:

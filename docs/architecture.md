@@ -1,242 +1,57 @@
-# Akita DDNS Architecture Overview
+# Architecture
 
-This document provides a high-level overview of the modular architecture of the Akita DDNS project.
+## Process layout
 
----
+`akita_ddns.main` loads and validates configuration, initializes Reticulum, loads the persisted node identity, starts the protocol server, and optionally starts the HTTP dashboard. The server owns two cancellable background tasks: gossip and TTL/cache maintenance. Signal-driven shutdown disables packet callbacks, unregisters the announce handler, cancels both tasks, and cleans up the HTTP runner.
 
-## Table of Contents
-- [Core Concepts](#core-concepts)
-- [Module Breakdown](#module-breakdown)
-  - [main.py](#mainpy)
-  - [config.py](#configpy)
-  - [storage.py](#storagepy)
-  - [crypto.py](#cryptopy)
-  - [namespace.py](#namespacepy)
-  - [reputation.py](#reputationpy)
-  - [network.py](#networkpy)
-  - [cli.py](#clipy)
-  - [utils.py](#utilspy)
-- [Data Flow Examples](#data-flow-examples)
-  - [Registration](#registration)
-  - [Resolution](#resolution)
-  - [Gossip](#gossip)
+The CLI uses the same configuration and identity storage. The `list` command intentionally avoids starting Reticulum, which makes local diagnostics usable even when no interface is available.
 
----
+## Reticulum destinations
 
-## Core Concepts
+Every destination includes the configured network ID as an aspect. This prevents unrelated Akita networks from sharing the same destination hashes.
 
-- **Decentralized:** Relies on Reticulum's mesh networking; no central servers.
-- **Gossip Protocol:** Nodes share their known registry information with peers for eventual consistency.
-- **Cryptographic Identity:** Uses Reticulum identities for signing registrations and verifying ownership.
-- **Namespaces:** Organizes names to prevent collisions and control ownership.
-- **TTL (Time-to-Live):** Registrations expire automatically unless periodically updated.
-- **Persistence:** Optionally saves state locally to survive restarts.
-- **Reputation:** Basic system to track peer behavior (optional).
+- `akita_ddns.<network-id>.broadcast`: one-hop `PLAIN` broadcast destination for client mutations and resolution requests.
+- `akita_ddns.<network-id>.node.<identity>`: announced `SINGLE` destination for peer gossip.
+- `akita_ddns.<network-id>.response.<identity>`: client `SINGLE` destination for resolution responses.
 
----
+Peers are learned from authenticated Reticulum announces, refreshed during gossip cycles, and removed after `peer_ttl`.
 
-## Module Breakdown
+Reticulum does not forward `PLAIN` data beyond one hop. A CLI therefore sends to Akita servers on its local/shared Reticulum instance or directly attached interface. Servers use routed `SINGLE` destinations for peer gossip, so an accepted event can cross the multi-hop network even though its client ingress packet cannot. Deploy an Akita server at every client ingress point.
 
-The codebase is organized into several Python modules inside the `akita_ddns` package.
+## Wire protocol
 
----
+`protocol.py` encodes a compact MessagePack array containing a protocol version, numeric command, and command fields. Decoding limits the packet and collection sizes. Encoding rejects any message larger than `RNS.Packet.MDU`.
 
-### main.py
+Registration signatures cover the namespace, name, destination hash, TTL, and timestamp in a canonical MessagePack representation. The public key carried with a record reconstructs the signer identity. Namespace ownership is checked after signature validation.
 
-<details>
-<summary><strong>Click to expand</strong></summary>
+Resolution requests contain the requester's public key and a cryptographically random nonce. A server returns the complete signed registry entry to the requester's `SINGLE` destination. The client validates the nonce, fields, lifetime, signature, and any locally known namespace owner before accepting the destination hash.
 
-- Entry point for server and CLI modes.
-- Parses top-level arguments and dispatches to server or CLI.
-- Initializes Reticulum.
-- Sets up signal handling for graceful shutdown (server mode).
-- Orchestrates server components or CLI commands.
+## Registry and revocation
 
-</details>
+The in-memory registry is guarded by a re-entrant lock and capped by `max_registry_size`. Newer timestamps win. When timestamps are equal, a stable tuple ordering makes all peers choose the same record.
 
----
+A revocation is a signed registration with an empty destination hash and a TTL equal to `max_registration_ttl`. It is not returned by resolution, but it is persisted and gossiped until all records it supersedes must have expired. This prevents delayed gossip from restoring the revoked value.
 
-### config.py
+Gossip sends one signed registry or namespace event per Reticulum packet. `max_gossip_entries_per_cycle` bounds work and traffic; a rotating cursor ensures larger registries are covered across cycles.
 
-<details>
-<summary><strong>Click to expand</strong></summary>
+## Namespace ownership
 
-- Defines default configuration values.
-- Loads configuration from `akita_config.yaml`.
-- Validates configuration settings.
-- Caches the most recently loaded config by path to avoid mixing settings from different config files in the same process.
-- Provides access to the global configuration dictionary.
+A namespace record contains a signed create event followed by signed, sequenced transfer events. A create event is accepted only when signed by the identity whose hash is `akita_namespace_identity_hash`; this provides a stable trust root and prevents arbitrary identities from racing or grinding namespace claims. Each transfer signs the namespace, new owner, sequence, timestamp, and random transfer ID.
 
-</details>
+If the same owner signs competing transfers at one sequence, the lower transfer ID wins and later events on the losing branch are discarded. This rule provides arrival-order-independent convergence after the authority creates a namespace.
 
----
+When ownership changes, registry entries not signed by the new owner are removed and cached values for that namespace are invalidated. Ownership chains are persisted and replay-verified at startup. Legacy owner-only records have no proof chain and are ignored.
 
-### storage.py
+Unclaimed namespaces are closed by default. `allow_unowned_namespaces: true` enables open namespaces, where any identity can overwrite a name with a newer signed record; this mode does not provide name ownership and is intended only for explicitly trusted meshes.
 
-<details>
-<summary><strong>Click to expand</strong></summary>
+## Persistence
 
-- **PersistentStorage:** Saves and loads state (registry, namespaces, reputation) via YAML files with atomic writes.
-- **Registry:** 
-  - Manages the DDNS in-memory registry (name -> RID mappings).
-  - Handles TTLs, gossip updates, and local resolutions.
-  - Works with PersistentStorage for persistence.
-- **Cache:** 
-  - Maintains an in-memory cache of resolved names.
-  - Includes TTL expiry logic for cache entries.
+Registry, namespace, and reputation state use YAML only on local disk; YAML is not used on the network. Reads use `safe_load`, reject oversized files, validate structure, and cryptographically recheck signed records. Writes use `safe_dump`, mode `0600`, `fsync`, atomic replacement, and directory synchronization where the filesystem supports it.
 
-</details>
+The resolution cache is a process-wide bounded LRU. Registry lookup itself is constant-time; the cache exists for consumers that use it, and mutation handlers explicitly invalidate affected entries.
 
----
+## HTTP dashboard
 
-### crypto.py
+The aiohttp dashboard uses snapshot methods instead of reaching into component internals. Request bodies are bounded, errors do not expose exception details, and browser security headers are applied to responses. Data is rendered with DOM `textContent`, preventing registry values from becoming HTML.
 
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- Provides wrappers around Reticulum identity signing and verification.
-- Reconstructs Reticulum identities from embedded public keys for signature checks.
-- Functions for generating and verifying digital signatures.
-
-</details>
-
----
-
-### namespace.py
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- **NamespaceManager:**
-  - Manages namespace ownership.
-  - Verifies authority for registrations in namespaces.
-  - Persists namespace data via PersistentStorage.
-
-</details>
-
----
-
-### reputation.py
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- **ReputationManager:**
-  - Manages peer reputation scores based on behavior.
-  - Observes valid signatures, successful resolutions, etc.
-  - Persists reputation data via PersistentStorage.
-
-</details>
-
----
-
-### network.py
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- **Client Anycast Listener:** 
-  - Listens for incoming Reticulum packets on an un-identified `PLAIN` Akita destination. This allows local CLI clients to reach the nearest running Akita node automatically.
-- **Node-Specific Listener & P2P Gossip:**
-  - Nodes discover each other via Reticulum Announces and maintain a list of known peers.
-  - Nodes gossip updates by sending direct `SINGLE` packets to known peers.
-  - Verifies message authenticity from signed payload data and embedded public keys.
-  - Sends and receives protocol messages.
-  - Runs background tasks like gossiping the registry and TTL checks.
-
-</details>
-
----
-
-### cli.py
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- Defines CLI structure with `argparse`.
-- Implements commands: `register`, `resolve`, `create_namespace`, `list`.
-- Uses network helpers to send/receive Akita protocol messages.
-- Loads local state directly for `list` operations.
-
-</details>
-
----
-
-### utils.py
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-- Provides miscellaneous utilities:
-  - **RateLimiter:** Limits incoming request rates.
-  - **build_registration_payload:** Builds the signed registration payload used by CLI, server helpers, and gossip verification.
-  - **parse_name:** Helper for parsing fully qualified names into name/namespace parts.
-
-</details>
-
----
-
-## Data Flow Examples
-
----
-
-### Registration
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-1. CLI uses `ret.Packet` to send the payload to the Anycast destination (`APP_NAME, "broadcast"`).
-2. Reticulum routes this to the nearest active `AkitaServer` node.
-3. Node receives `REGISTER` packet.
-4. Rate limit checked (`utils.RateLimiter`).
-5. Packet parsed and signature verified from the embedded public key.
-6. Namespace ownership verified against the signer identity (`namespace.NamespaceManager.is_authorized`).
-7. Entry added or updated in `storage.Registry`.
-8. State persisted via `PersistentStorage.save_registry()`.
-9. Reputation updated (`reputation.ReputationManager.update_reputation`).
-
-</details>
-
----
-
-### Resolution
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-1. CLI asks for resolution of `myname.mynamespace`.
-2. CLI sends `RESOLVE` packet to the Anycast destination.
-3. Nearest Node receives `RESOLVE` packet.
-4. Rate limit checked.
-5. Packet parsed.
-6. Check `storage.Cache` for result.
-7. If not cached or expired:
-   - Check `storage.Registry.resolve()`.
-   - If found, update cache (`storage.Cache.put()`).
-8. Server sends `RESPONSE` packet back to requester's destination.
-9. CLI/Client's `_cli_response_callback()` processes the response.
-
-</details>
-
----
-
-### Gossip
-
-<details>
-<summary><strong>Click to expand</strong></summary>
-
-1. Server's `AkitaServer.run_gossip_loop()` periodically triggers.
-2. Gets valid registry entries via `Registry.get_registry_for_gossip()`.
-3. `network.py` serializes the dictionary to YAML.
-4. Sends `GOSSIP` packets directly to all discovered peer nodes.
-5. Receiving server handles packet:
-   - Parses YAML.
-   - Converts hex back to bytes.
-   - Passes to `Registry.process_gossip()`.
-6. Verifies entries, timestamps, signatures, and namespace-owner identity.
-7. Updates local registry if necessary.
-8. Leaves reputation updates to validated registration and namespace-owner events.
-
-</details>
-
----
+Read endpoints are enabled with the dashboard. Registration mutation is absent unless explicitly enabled and protected by a constant-time bearer-token comparison.

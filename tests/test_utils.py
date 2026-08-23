@@ -1,7 +1,8 @@
 # tests/test_utils.py
 import unittest
-from akita_ddns.utils import parse_name, RateLimiter
-import time
+
+from akita_ddns.utils import RateLimiter, parse_name
+
 
 class TestUtils(unittest.TestCase):
     def test_parse_name_simple(self):
@@ -27,6 +28,7 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(rl.check())
         self.assertTrue(rl.check())
         self.assertFalse(rl.check())  # Should be rate limited
+
 
 if __name__ == "__main__":
     unittest.main()

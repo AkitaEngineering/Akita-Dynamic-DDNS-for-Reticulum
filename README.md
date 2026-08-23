@@ -1,151 +1,110 @@
-# Akita DDNS - Distributed DNS for RNS (Reticulum)
+# Akita DDNS
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+Akita DDNS is a signed, distributed destination-name registry for the Reticulum Network Stack. It maps human-readable `name.namespace` values to Reticulum destination hashes and propagates records between Akita peers with bounded gossip packets.
 
-**Developed by Akita Engineering (https://www.akitaengineering.com)**
+## Security and reliability properties
 
-Akita DDNS is a robust, decentralized, and dynamic destination naming system (DDNS) built on the Reticulum Network Stack (imported in code as `RNS`). It provides a resilient alternative to traditional centralized DNS for mapping human-readable names to dynamic Reticulum identities (RIDs) within a mesh network.
+- Registrations, revocations, namespace claims, and namespace transfers are signed by Reticulum identities.
+- Each wire message uses a versioned MessagePack schema and is checked against Reticulum's packet MDU before transmission.
+- Resolution requests use a random nonce and a `SINGLE` response destination. Clients verify the returned registration signature and TTL.
+- Revocations are signed tombstones retained for the maximum registration TTL, preventing stale gossip from resurrecting a deleted record.
+- Namespace creation is authorized by the identity whose hash is the configured network ID. Same-sequence transfers have deterministic winners so peers converge regardless of arrival order.
+- Unclaimed namespaces reject registrations by default. Operators can explicitly opt into open, first-writer-unprotected namespaces with `allow_unowned_namespaces`.
+- Timestamps, TTLs, labels, hashes, public keys, signatures, registry size, namespace count, state-file size, and HTTP request size are bounded.
+- State writes use private permissions, a temporary file, `fsync`, atomic replacement, and directory synchronization where supported.
+- Persisted registry and namespace records are cryptographically revalidated when loaded.
+- The dashboard escapes untrusted data, sends restrictive browser security headers, and disables mutation by default.
 
-Akita DDNS uses RNS identities and application destinations to sign and distribute name registrations, and a lightweight gossip protocol to propagate registry entries across peers.
-
-## Features
-
-* **Decentralized Registry:** No single point of failure. Registry data is distributed across participating nodes via a gossip protocol.
-* **Cryptographically Secure:** Utilizes Reticulum's identity-based signatures for authenticating registrations, updates, and namespace control.
-* **Dynamic Updates:** Nodes can automatically update their associated RIDs when they change.
-* **Namespace Management:** Organize names into namespaces to prevent collisions. Supports cryptographic ownership of namespaces.
-* **Resilient:** Designed to operate effectively over Reticulum's potentially low-bandwidth, high-latency mesh links.
-* **TTL (Time-to-Live):** Registrations automatically expire, ensuring stale entries are eventually removed.
-* **Persistence:** Optionally saves state (registry, namespaces, reputation) locally to survive restarts.
-* **Rate Limiting:** Basic protection against request flooding.
-* **Web UI Dashboard:** An embedded, responsive HTTP dashboard to view real-time mesh registry data.
-* **Reputation System:** Optional tracking of peer behavior to potentially prioritize reliable nodes (future enhancement).
-* **Modular Codebase:** Organized Python package for maintainability and extensibility.
-* **CLI Interface:** Command-line tool for easy interaction (register, resolve, watch, revoke, manage namespaces, inspect local state).
-
+Akita provides integrity and namespace authorization, not traffic anonymity. Client requests travel to a Reticulum `PLAIN` broadcast destination; signed records and public keys are therefore observable on the directly attached Reticulum segment. Reticulum accepts `PLAIN` data only through one network hop, so every CLI client must have an Akita server on its local/shared Reticulum instance or directly reachable interface. After a server accepts an event, Akita propagates it between servers through routed `SINGLE` destinations. Resolution responses also use routed `SINGLE` destinations.
 
 ## Requirements
-- Python 3.7+
 
-See `requirements.txt` for specific Python package dependencies (`rns`, `pyyaml`, `aiohttp`, `pytest`).
+- Python 3.10 or newer
+- Reticulum 1.x with at least one configured interface
 
----
-
-## Installation
-Clone the repository:
-
-    git clone https://github.com/AkitaEngineering/Akita-Dynamic-DDNS-for-Reticulum 
-    cd akita-ddns # Or your chosen directory name
-
-Install dependencies (recommended inside a virtualenv):
-
-    python -m venv .venv
-    .venv\Scripts\activate    # Windows
-    source .venv/bin/activate  # macOS / Linux
-    pip install -r requirements.txt
-
-Configure: Create `akita_config.yaml` in the project root (see `akita_config.yaml (Example)`).
-
-Important:
-- `akita_namespace_identity_hash` identifies the shared Akita network. You can either paste a pre-generated hash or let the project create and store an identity. Example generation (uses `RNS`):
-
-    python -c "import RNS as ret; print(ret.Identity().hash.hex())"
-
-By default the node will create an identity file under the configured `storage_path` if none is present.
-
----
-
-## Usage
-See `docs/examples.md` for detailed usage examples.
-
-### 1. Run the Server Node:
-
-Ensure `akita_config.yaml` is present (or pass `--config <path>`). Then run:
+## Install
 
 ```bash
-# start server (uses config path if provided)
-python -m akita_ddns.main --config akita_config.yaml server
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
 ```
 
-The server will initialize RNS, create/load an identity (if needed), start the Web UI dashboard on `127.0.0.1:48080`, discover peers via Announces, gossip registry entries, and perform periodic TTL checks.
-
-### 2. Use the CLI:
-
-The CLI is part of the same module and uses the local RNS instance and stored identity. Examples:
+For development and verification:
 
 ```bash
-# Register (uses default identity under storage_path)
-python -m akita_ddns.main --config akita_config.yaml cli register --name mynode
-
-# Resolve with a timeout
-python -m akita_ddns.main --config akita_config.yaml cli resolve --name mynode --timeout 5
-
-# Create a namespace (signed by identity)
-python -m akita_ddns.main --config akita_config.yaml cli create_namespace --namespace home
-
-# Transfer a namespace to a new identity
-python -m akita_ddns.main --config akita_config.yaml cli transfer_namespace --namespace home --new_owner <NEW_HASH>
-
-# Revoke a registration early
-python -m akita_ddns.main --config akita_config.yaml cli revoke --name mynode
-
-# Watch a name continuously for changes
-python -m akita_ddns.main --config akita_config.yaml cli watch --name mynode.home --interval 5
-
-# Show persisted state (if persistence enabled)
-python -m akita_ddns.main --config akita_config.yaml cli list --registry --namespaces --reputation
+python -m pip install -r requirements-dev.txt
 ```
 
-Use:
-    python -m akita_ddns.main --config akita_config.yaml cli <command> --help
+Copy `akita_config.yaml (Example)` to `akita_config.yaml` and review every setting. Multi-node deployments must set the same 32-character `akita_namespace_identity_hash` on every participating node. That hash is also the namespace-creation authority, so retain its identity file securely. When the field is `null`, Akita uses the local persisted node identity hash; that mode is suitable only for a local or single-node deployment.
 
-for command-specific options.
+Relative storage paths are resolved from the configuration file's directory, not from the process working directory. Unknown or unsafe configuration values stop startup instead of silently falling back.
 
----
+## Run
 
-## Testing
+After installation, either use the console command or `python -m akita_ddns.main`:
 
-Run the test suite with:
+```bash
+akita-ddns --config akita_config.yaml server
 
-    pytest tests/
+akita-ddns --config akita_config.yaml cli create_namespace --namespace home --owner_identity ./akita-network-authority
+akita-ddns --config akita_config.yaml cli register --name router.home
+akita-ddns --config akita_config.yaml cli resolve --name router.home --timeout 5
+akita-ddns --config akita_config.yaml cli watch --name router.home --interval 10
+akita-ddns --config akita_config.yaml cli revoke --name router.home
+akita-ddns --config akita_config.yaml cli list --registry --namespaces --reputation
+```
 
-Current automated coverage includes configuration loading, Reticulum public-key signature verification, packet dispatch behavior, gossip ownership checks, and utility helpers.
+Namespace transfers require the ownership chain to be present in the client's configured local state:
 
-See `docs/testing.md` for the current testing scope and manual multi-node validation guidance.
+```bash
+akita-ddns --config akita_config.yaml cli transfer_namespace \
+  --namespace home \
+  --new_owner 0123456789abcdef0123456789abcdef
+```
 
----
+Names and namespaces are 1–63 ASCII letters, digits, underscores, or hyphens and must begin with a letter or digit. A fully qualified name contains one dot: `name.namespace`.
 
-## Configuration (`akita_config.yaml`)
+With the production default `allow_unowned_namespaces: false`, claim a namespace before registering in it. After a transfer, registrations must be signed by the current owner identity.
 
-This file controls Akita's behavior. Key settings include:
+The CLI verifies protected resolution responses against the ownership chain in its configured persistence directory. Run CLI operations against a local synchronized Akita node's configuration, or copy the verified namespace state securely before resolving from a separate client host.
 
-- `akita_namespace_identity_hash`: Shared hash defining your Akita network. If omitted the node will create/store an identity and use its hash.
-- `persist_state`: Enable/disable saving state to disk.
-- `persistence_path`: Directory for state files.
-- Timing intervals (`gossip_interval`, `ttl_check_interval`, etc.).
-- Logging level (`log_level`).
+Client requests are intentionally one-hop Reticulum broadcasts. Deploy at least one Akita server at each client ingress point; server-to-server gossip carries accepted changes across the wider multi-hop network.
 
-Refer to the example `akita_config.yaml` for all options and detailed comments.
+## Dashboard and HTTP API
 
----
+The default dashboard listens only on `127.0.0.1:48080`.
+
+- `GET /healthz`
+- `GET /api/registry`
+- `GET /api/namespaces`
+- `GET /api/reputation`
+- `POST /api/resolve`
+
+`POST /api/register` is registered only when `web_ui_allow_mutations: true`. Enabling it also requires a token of at least 32 characters, supplied by `AKITA_WEB_UI_API_TOKEN` or `web_ui_api_token`. The environment variable takes precedence and avoids storing the secret in YAML. Send it as `Authorization: Bearer <token>`. If the dashboard is exposed beyond loopback, put it behind an authenticated TLS reverse proxy and restrict network access.
+
+## Operations
+
+- Back up the configured persistence directory and the `akita_identity` file together. The identity file is the signing authority.
+- Keep clocks within `max_clock_skew`; badly skewed future registrations and transfers are rejected.
+- Set `default_ttl` below or equal to `max_registration_ttl` and refresh registrations before they expire.
+- The health endpoint proves the HTTP event loop is serving. Production supervision should also watch process exit status and logs.
+- Upgrading from the pre-1.0 text/YAML wire protocol is intentionally incompatible. Upgrade all peers together. Unverifiable legacy namespace state is ignored; recreate namespace claims with the configured network-authority identity.
+
+## Verify
+
+```bash
+pytest -q
+python -m compileall -q akita_ddns tests
+mypy akita_ddns
+ruff check akita_ddns tests
+ruff format --check akita_ddns tests
+python -m build
+```
+
+See [usage examples](docs/examples.md), [architecture](docs/architecture.md), and [testing guidance](docs/testing.md).
 
 ## License
-This project is licensed under the **GNU General Public License v3.0**. See the `LICENSE` file for details.
 
----
-
-## Contributing
-
-Contributions are welcome. Please follow standard GitHub workflow:
-
-- Fork the repository
-- Create a feature branch
-- Add tests where appropriate
-- Submit a PR with a clear description
-
-See `docs/testing.md` for testing instructions.
-
----
-
-**Akita Engineering** — Building resilient communication systems.  
-[www.akitaengineering.com](http://www.akitaengineering.com)
+GNU General Public License v3.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,3 +1,3 @@
-# akita_ddns/__init__.py
-# Initializes the akita_ddns package.
+"""Akita DDNS package."""
 
+__version__ = "1.0.0"

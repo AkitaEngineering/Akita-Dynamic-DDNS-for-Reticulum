@@ -16,4 +16,6 @@ def test_verify_signature_with_public_key_accepts_valid_signature():
     message = b"akita"
     signature = identity.sign(message)
 
-    assert verify_signature_with_public_key(message, signature, identity.get_public_key())
+    assert verify_signature_with_public_key(
+        message, signature, identity.get_public_key()
+    )

@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Akita DDNS Dashboard</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
-        
         :root {
             --bg: #0f172a;
             --glass-bg: rgba(30, 41, 59, 0.7);
@@ -19,7 +17,7 @@
         body {
             background-color: var(--bg);
             color: var(--text-main);
-            font-family: 'Inter', system-ui, sans-serif;
+            font-family: system-ui, sans-serif;
             margin: 0;
             padding: 40px 20px;
             display: flex;
@@ -158,6 +156,23 @@
 </div>
 
 <script>
+    function clearAndMessage(body, columns, message) {
+        body.replaceChildren();
+        const row = body.insertRow();
+        const cell = row.insertCell();
+        cell.colSpan = columns;
+        cell.style.textAlign = 'center';
+        cell.style.color = 'var(--text-muted)';
+        cell.textContent = message;
+    }
+
+    function addCell(row, value, className) {
+        const cell = row.insertCell();
+        if (className) cell.className = className;
+        cell.textContent = String(value);
+        return cell;
+    }
+
     async function fetchData() {
         try {
             const [regRes, nsRes, repRes] = await Promise.all([
@@ -169,19 +184,18 @@
             if (regRes && regRes.ok) {
                 const regData = await regRes.json();
                 const regBody = document.getElementById('registry-body');
-                regBody.innerHTML = '';
                 if (regData.length === 0) {
-                    regBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">No active entries</td></tr>';
+                    clearAndMessage(regBody, 4, 'No active entries');
                 } else {
+                    regBody.replaceChildren();
                     const now = Date.now() / 1000;
                     regData.forEach(entry => {
                         const expires = Math.max(0, Math.round(entry.expiration - now));
-                        regBody.innerHTML += `<tr>
-                            <td><span class="badge">${entry.namespace}</span></td>
-                            <td style="font-weight: 600; color: white;">${entry.name}</td>
-                            <td class="timestamp">${entry.rid}</td>
-                            <td>${expires}s</td>
-                        </tr>`;
+                        const row = regBody.insertRow();
+                        addCell(row, entry.namespace, 'badge');
+                        addCell(row, entry.name);
+                        addCell(row, entry.rid, 'timestamp');
+                        addCell(row, `${expires}s`);
                     });
                 }
             }
@@ -189,16 +203,15 @@
             if (nsRes && nsRes.ok) {
                 const nsData = await nsRes.json();
                 const nsBody = document.getElementById('namespaces-body');
-                nsBody.innerHTML = '';
                 const nsKeys = Object.keys(nsData);
                 if (nsKeys.length === 0) {
-                    nsBody.innerHTML = '<tr><td colspan="2" style="text-align:center; color: var(--text-muted);">No namespaces</td></tr>';
+                    clearAndMessage(nsBody, 2, 'No namespaces');
                 } else {
+                    nsBody.replaceChildren();
                     nsKeys.forEach(ns => {
-                        nsBody.innerHTML += `<tr>
-                            <td><span class="badge">${ns}</span></td>
-                            <td class="timestamp">${nsData[ns]}</td>
-                        </tr>`;
+                        const row = nsBody.insertRow();
+                        addCell(row, ns, 'badge');
+                        addCell(row, nsData[ns], 'timestamp');
                     });
                 }
             }
@@ -206,16 +219,15 @@
             if (repRes && repRes.ok) {
                 const repData = await repRes.json();
                 const repBody = document.getElementById('reputation-body');
-                repBody.innerHTML = '';
                 const repKeys = Object.keys(repData);
                 if (repKeys.length === 0) {
-                    repBody.innerHTML = '<tr><td colspan="2" style="text-align:center; color: var(--text-muted);">No reputation data</td></tr>';
+                    clearAndMessage(repBody, 2, 'No reputation data');
                 } else {
+                    repBody.replaceChildren();
                     repKeys.sort((a,b) => repData[b] - repData[a]).forEach(hash => {
-                        repBody.innerHTML += `<tr>
-                            <td class="timestamp">${hash}</td>
-                            <td><span class="badge">${repData[hash]}</span></td>
-                        </tr>`;
+                        const row = repBody.insertRow();
+                        addCell(row, hash, 'timestamp');
+                        addCell(row, repData[hash], 'badge');
                     });
                 }
             }

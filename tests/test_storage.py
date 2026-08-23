@@ -1,52 +1,121 @@
-import tempfile
+import os
 import time
 
 import RNS as ret
 
 from akita_ddns.crypto import generate_signature
-from akita_ddns.storage import PersistentStorage, Registry
+from akita_ddns.storage import Cache, PersistentStorage, Registry
 from akita_ddns.utils import build_registration_payload
 
 
-def make_storage_config(tmpdir):
+def make_storage_config(tmp_path, persist=False):
     return {
-        "persist_state": False,
-        "registry_file_path": None,
-        "namespace_owners_file_path": None,
-        "reputation_file_path": None,
+        "persist_state": persist,
+        "registry_file_path": str(tmp_path / "registry.yaml") if persist else None,
+        "namespace_owners_file_path": str(tmp_path / "namespaces.yaml")
+        if persist
+        else None,
+        "reputation_file_path": str(tmp_path / "reputation.yaml") if persist else None,
+        "max_state_file_bytes": 1024 * 1024,
+        "max_registration_ttl": 604800,
+        "max_clock_skew": 300,
+        "max_registry_size": 10,
         "cache_ttl": 300,
-        "max_cache_size": 1000,
-        "storage_path": tmpdir,
+        "max_cache_size": 2,
     }
 
 
-def test_process_gossip_accepts_namespace_owner_with_distinct_rid():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage = PersistentStorage(make_storage_config(tmpdir))
-        registry = Registry(storage, {})
+def signed_entry(
+    identity, namespace="secure", name="node", rid=None, timestamp=None, ttl=300
+):
+    rid = rid if rid is not None else ret.Identity().hash
+    timestamp = timestamp if timestamp is not None else int(time.time())
+    payload = build_registration_payload(namespace, name, rid.hex(), ttl, timestamp)
+    return (
+        rid,
+        timestamp,
+        generate_signature(payload, identity),
+        timestamp + ttl,
+        identity.get_public_key(),
+    )
 
-        owner_identity = ret.Identity()
-        destination_identity = ret.Identity()
-        ts = int(time.time())
-        ttl = 300
-        payload = build_registration_payload("secure", "node", destination_identity.hash.hex(), ttl, ts)
-        signature = generate_signature(payload, owner_identity)
 
-        gossip = {
-            "secure": {
-                "node": (
-                    destination_identity.hash,
-                    ts,
-                    signature,
-                    ts + ttl,
-                    owner_identity.get_public_key(),
-                )
-            }
-        }
+def test_process_gossip_accepts_namespace_owner_with_distinct_rid(tmp_path):
+    storage = PersistentStorage(make_storage_config(tmp_path))
+    registry = Registry(storage, storage.config)
+    owner = ret.Identity()
+    entry = signed_entry(owner)
 
-        new_count, updated_count = registry.process_gossip(gossip, {"secure": owner_identity.hash.hex()})
-        entry = registry.resolve("secure", "node")
+    counts = registry.process_gossip(
+        {"secure": {"node": entry}}, {"secure": owner.hash.hex()}
+    )
 
-        assert (new_count, updated_count) == (1, 0)
-        assert entry is not None
-        assert entry[0] == destination_identity.hash
+    assert counts == (1, 0)
+    assert registry.resolve("secure", "node")[0] == entry[0]
+
+
+def test_registry_rejects_invalid_signature(tmp_path):
+    storage = PersistentStorage(make_storage_config(tmp_path))
+    registry = Registry(storage, storage.config)
+    owner = ret.Identity()
+    entry = list(signed_entry(owner))
+    entry[2] = b"x" * 64
+
+    assert registry.register("secure", "node", *entry) is False
+
+
+def test_signed_tombstone_blocks_older_record(tmp_path):
+    storage = PersistentStorage(make_storage_config(tmp_path))
+    registry = Registry(storage, storage.config)
+    owner = ret.Identity()
+    now = int(time.time())
+    live = signed_entry(owner, timestamp=now - 1, ttl=300)
+    assert registry.register("secure", "node", *live)
+
+    tombstone = signed_entry(owner, rid=b"", timestamp=now, ttl=604800)
+    assert registry.register("secure", "node", *tombstone)
+    assert registry.resolve("secure", "node") is None
+    assert registry.register("secure", "node", *live) is False
+
+
+def test_cache_limit_is_global_lru(tmp_path):
+    cache = Cache(make_storage_config(tmp_path))
+    cache.put("one", "a", b"a")
+    cache.put("two", "b", b"b")
+    assert cache.get("one", "a") == b"a"  # make this most recently used
+    cache.put("three", "c", b"c")
+
+    assert cache.get("two", "b") is None
+    assert cache.get("one", "a") == b"a"
+    assert cache.get("three", "c") == b"c"
+
+
+def test_reconcile_removes_entries_from_unowned_namespaces(tmp_path):
+    storage = PersistentStorage(make_storage_config(tmp_path))
+    registry = Registry(storage, storage.config)
+    owner = ret.Identity()
+    entry = signed_entry(owner, namespace="open")
+    assert registry.register("open", "node", *entry)
+
+    assert registry.reconcile_namespace_owners({}, allow_unowned=False) == 1
+    assert registry.resolve("open", "node") is None
+
+
+def test_persisted_registry_is_private_and_signature_checked(tmp_path):
+    config = make_storage_config(tmp_path, persist=True)
+    storage = PersistentStorage(config)
+    registry = Registry(storage, config)
+    owner = ret.Identity()
+    entry = signed_entry(owner)
+    assert registry.register("secure", "node", *entry)
+    assert os.stat(config["registry_file_path"]).st_mode & 0o777 == 0o600
+
+    loaded = Registry(PersistentStorage(config), config)
+    assert loaded.resolve("secure", "node")[0] == entry[0]
+
+    text = (tmp_path / "registry.yaml").read_text(encoding="utf-8")
+    (tmp_path / "registry.yaml").write_text(
+        text.replace(entry[2].hex(), "00" * 64), encoding="utf-8"
+    )
+    corrupted = Registry(PersistentStorage(config), config)
+    assert corrupted.resolve("secure", "node") is None

@@ -1,16 +1,5 @@
-# requirements.txt for Akita DDNS
-
-# Core mesh networking library
-# Reticulum Network Stack (imported as RNS)
-rns>=1.1.0
-
-# YAML parsing for configuration and persistence
-# PyYAML 6.0+ requires libyaml development headers on some systems for speedups
-# Use >=5.4 for broader compatibility if libyaml is an issue
-pyyaml>=5.4
-
-# Testing framework
-pytest>=7.0.0
-
-# Web UI Dashboard
-aiohttp>=3.8.0
+# Runtime dependencies. Equivalent metadata is declared in pyproject.toml.
+rns>=1.1,<2
+PyYAML>=6,<7
+aiohttp>=3.10,<4
+msgpack>=1,<2

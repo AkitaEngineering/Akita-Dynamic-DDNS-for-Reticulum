@@ -1,113 +1,50 @@
-# Testing Akita DDNS
+# Testing and release verification
 
-Testing a decentralized, peer-to-peer system like Akita DDNS is different from testing a typical client-server application. Some logic can be covered well with unit tests, but live Reticulum behavior still needs manual or future integration coverage.
+## Automated suite
 
-## Current Status
-
-- Unit tests cover core helper and protocol-validation paths.
-- Manual multi-node testing is still required for real Reticulum network behavior.
-- Integration and end-to-end tests are not implemented yet.
-
-## What Is Covered Today
-
-The current automated suite exercises these areas:
-
-- `config.load_config` path-sensitive reload behavior
-- `crypto.identity_from_public_key`
-- `crypto.verify_signature_with_public_key`
-- `network.AkitaServer._on_packet` dispatch behavior
-- `storage.Registry.process_gossip`
-- `utils.parse_name`
-- `utils.RateLimiter`
-
-Current test files:
-
-- `tests/test_config.py`
-- `tests/test_crypto.py`
-- `tests/test_network.py`
-- `tests/test_storage.py`
-- `tests/test_utils.py`
-
-## Running Unit Tests
-
-Install dependencies:
+Install development dependencies and run all checks from the repository root:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+pytest -q
+python -m compileall -q akita_ddns tests
+mypy akita_ddns
+ruff check akita_ddns tests
+ruff format --check akita_ddns tests
+python -m build
+python -m pip check
 ```
 
-Run the suite:
+The suite covers:
 
-```bash
-pytest tests/
-```
+- strict configuration parsing, path resolution, and unsafe-setting rejection;
+- identity reconstruction and signature validation;
+- bounded MessagePack encoding and malformed-packet rejection;
+- packet dispatch and Reticulum's `None`-on-success send contract;
+- signed registration gossip with a destination distinct from its owner;
+- invalid-signature rejection, rollback protection, and signed tombstones;
+- global LRU cache eviction;
+- private, atomically written persistence and verification on reload;
+- authority-gated namespace creation, transfer, replay rejection, and deterministic transfer conflict resolution;
+- label parsing and token-bucket behavior.
 
-## Manual Multi-Node Testing
+## Live two-node release smoke test
 
-Manual testing is the current way to validate peer-to-peer behavior across real Reticulum nodes.
+Automated tests isolate application logic from radio and interface behavior. Before deploying a new release to a real mesh, perform this short test with the exact Reticulum configuration and hardware used in production.
 
-### Setup
+1. Create two Akita configuration files with the same `akita_namespace_identity_hash`, separate `storage_path` values, separate `persistence_path` values, short `gossip_interval`, and `peer_ttl` greater than the gossip interval.
+2. Start one server with each configuration and confirm both log peer discovery.
+3. Create a namespace with the network-authority identity, wait for gossip, and confirm `cli list --namespaces` shows the same owner on both nodes.
+4. Register a name with the namespace owner identity. Resolve it through each node and compare the destination hash.
+5. Update the name twice in the same second from the owner and confirm both nodes converge to the same deterministic value.
+6. Revoke the name, wait for gossip, and confirm neither node resolves it. Restart one node and confirm the tombstone still blocks the older record.
+7. Transfer the namespace from a client whose local persistence contains the ownership chain. Confirm both nodes remove records signed by the previous owner and reject new registrations from it.
+8. Stop and restart both nodes. Confirm registry signatures and namespace chains load without warnings and non-expired records remain resolvable.
+9. Send malformed, oversized, expired, future-dated, and invalid-signature packets from a test client. Confirm they are rejected without process termination or state changes.
+10. Query `/healthz` and all dashboard read APIs. If HTTP mutation is enabled, verify missing and incorrect bearer tokens receive `401` and the correct token can register only names authorized for the server identity.
+11. Send enough names to exercise `max_registry_size` and enough requests to trigger the rate limiter. Confirm the process remains responsive and logs bounded refusals.
+12. Stop each process with both SIGTERM and SIGINT and confirm it exits cleanly without a temporary state file remaining.
 
-Use separate terminals and separate config files. Nodes that should participate in the same Akita network must share the same `akita_namespace_identity_hash`, but should use different persistence directories.
+## Release gate
 
-```bash
-# Terminal 1 (Node A)
-cp akita_config.yaml node_a_config.yaml
-# Edit node_a_config.yaml: persistence_path: ./akita_state_a
-python -m akita_ddns.main --config node_a_config.yaml server
-
-# Terminal 2 (Node B)
-cp akita_config.yaml node_b_config.yaml
-# Edit node_b_config.yaml: persistence_path: ./akita_state_b
-python -m akita_ddns.main --config node_b_config.yaml server
-
-# Terminal 3 (CLI interaction)
-# Use any matching config file for client operations
-```
-
-### Suggested Scenarios
-
-1. Registration: Register names on Node A, wait for gossip, and verify that Node B can resolve them.
-2. Resolution: Resolve names registered only on Node B from Node A.
-3. Updates: Change an existing registration on one node and verify that the newer value propagates.
-4. TTL expiry: Register a short-lived name and confirm it disappears after expiry with `cli list --registry`.
-5. Namespace ownership: Create a namespace on one node, verify another identity cannot publish into it, then verify the owner identity can.
-6. Persistence: Restart nodes and confirm non-expired state is still available through `cli list` or `cli resolve`.
-7. Rate limiting: Send repeated rapid requests and inspect logs for throttling behavior.
-8. Gossip consistency: Compare `cli list --registry` output across peers after gossip intervals.
-9. Local state inspection: Check `cli list --registry`, `cli list --namespaces`, and `cli list --reputation` during tests.
-
-## Integration Testing Goals
-
-Integration tests should eventually validate interactions between modules and the network layer without depending on a full external deployment.
-
-Useful targets include:
-
-- Register and resolve flows through mocked Reticulum destinations and packets
-- Gossip message exchange and merge behavior
-- Namespace creation and ownership enforcement
-- Cache and TTL behavior across module boundaries
-
-Recommended future location:
-
-- `tests/integration/`
-
-## End-to-End Testing Goals
-
-End-to-end tests should exercise full application behavior in a controlled multi-node environment.
-
-Useful approaches include:
-
-- Containerized multi-node setups
-- Scripted CLI interactions
-- Assertions on visible outputs and persisted state
-
-Expected challenges:
-
-- More complex environment setup
-- Longer execution time
-- Managing network timing and discovery behavior
-
-## Conclusion
-
-The current test suite is enough to validate the core non-network logic and several protocol assumptions that are easy to break. It is not enough to prove full live-network correctness across multiple Reticulum peers. Manual testing is still the right validation path for that until integration or end-to-end coverage is added.
+A release passes when automated checks succeed in a clean environment, the built wheel contains `akita_ddns/static/index.html`, and the live smoke test succeeds on each production interface type. Preserve the command output and relevant server logs with the release artifacts.
