@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
 from typing import Optional, Tuple
@@ -130,6 +131,8 @@ def parse_name(full_name: str, default_namespace: str) -> Tuple[str, str]:
 
     full_name = full_name.strip()
     parts = full_name.split(".", 1)
+    if len(parts) > 1 and not parts[1].strip():
+        raise ValueError("Namespace cannot be empty.")
 
     name_part = parts[0].strip()
     validate_label(name_part, "name")
@@ -150,17 +153,39 @@ def load_or_create_identity(identity_path: str, save: bool = True) -> ret.Identi
         raise ValueError("Identity path is required")
     identity = None
     if os.path.exists(identity_path):
+        if os.path.islink(identity_path) or not os.path.isfile(identity_path):
+            raise ValueError("Identity path must be a regular file")
         identity = ret.Identity.from_file(identity_path)
-    if not identity:
-        identity = ret.Identity()
-        if save:
-            parent = os.path.dirname(os.path.abspath(identity_path))
-            os.makedirs(parent, mode=0o700, exist_ok=True)
-            identity.to_file(identity_path)
+        if not identity:
+            raise ValueError(f"Existing identity file is invalid: {identity_path}")
+        os.chmod(identity_path, 0o600)
+        return identity
+
+    identity = ret.Identity()
+    if save:
+        parent = os.path.dirname(os.path.abspath(identity_path))
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        descriptor, temp_path = tempfile.mkstemp(prefix=".akita-identity-", dir=parent)
+        os.close(descriptor)
+        try:
+            os.chmod(temp_path, 0o600)
+            if identity.to_file(temp_path) is not True:
+                raise OSError("Reticulum could not save the generated identity")
+            with open(temp_path, "rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temp_path, identity_path)
             try:
-                os.chmod(identity_path, 0o600)
+                directory_fd = os.open(parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
             except OSError:
-                log.warning(
-                    "Could not restrict identity file permissions: %s", identity_path
-                )
+                # Directory fsync is not available on every supported filesystem.
+                pass
+        finally:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
     return identity

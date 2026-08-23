@@ -1,10 +1,11 @@
 import os
 import time
 
+import pytest
 import RNS as ret
 
 from akita_ddns.crypto import generate_signature
-from akita_ddns.storage import Cache, PersistentStorage, Registry
+from akita_ddns.storage import Cache, PersistentStorage, Registry, StorageError
 from akita_ddns.utils import build_registration_payload
 
 
@@ -80,14 +81,18 @@ def test_signed_tombstone_blocks_older_record(tmp_path):
 
 def test_cache_limit_is_global_lru(tmp_path):
     cache = Cache(make_storage_config(tmp_path))
-    cache.put("one", "a", b"a")
-    cache.put("two", "b", b"b")
-    assert cache.get("one", "a") == b"a"  # make this most recently used
-    cache.put("three", "c", b"c")
+    owner = ret.Identity()
+    one = signed_entry(owner, namespace="one", name="a")
+    two = signed_entry(owner, namespace="two", name="b")
+    three = signed_entry(owner, namespace="three", name="c")
+    cache.put("one", "a", one)
+    cache.put("two", "b", two)
+    assert cache.get("one", "a") == one  # make this most recently used
+    cache.put("three", "c", three)
 
     assert cache.get("two", "b") is None
-    assert cache.get("one", "a") == b"a"
-    assert cache.get("three", "c") == b"c"
+    assert cache.get("one", "a") == one
+    assert cache.get("three", "c") == three
 
 
 def test_reconcile_removes_entries_from_unowned_namespaces(tmp_path):
@@ -119,3 +124,41 @@ def test_persisted_registry_is_private_and_signature_checked(tmp_path):
     )
     corrupted = Registry(PersistentStorage(config), config)
     assert corrupted.resolve("secure", "node") is None
+
+
+def test_registry_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    storage = PersistentStorage(make_storage_config(tmp_path, persist=True))
+    registry = Registry(storage, storage.config)
+    owner = ret.Identity()
+    entry = signed_entry(owner)
+    monkeypatch.setattr(storage, "save_registry", lambda data: False)
+
+    assert registry.register("secure", "node", *entry) is False
+    assert registry.resolve("secure", "node") is None
+
+
+def test_malformed_state_file_fails_closed(tmp_path):
+    config = make_storage_config(tmp_path, persist=True)
+    (tmp_path / "registry.yaml").write_text("- not-a-mapping\n", encoding="utf-8")
+
+    with pytest.raises(StorageError, match="state root"):
+        Registry(PersistentStorage(config), config)
+
+
+def test_oversized_state_write_is_rejected_before_replace(tmp_path):
+    config = make_storage_config(tmp_path, persist=True)
+    config["max_state_file_bytes"] = 1024
+    storage = PersistentStorage(config)
+
+    assert not storage._save_yaml({"value": "x" * 2048}, config["registry_file_path"])
+    assert not (tmp_path / "registry.yaml").exists()
+
+
+def test_state_loader_rejects_symlinks(tmp_path):
+    config = make_storage_config(tmp_path, persist=True)
+    target = tmp_path / "target.yaml"
+    target.write_text("{}\n", encoding="utf-8")
+    (tmp_path / "registry.yaml").symlink_to(target)
+
+    with pytest.raises(StorageError, match="regular file"):
+        Registry(PersistentStorage(config), config)

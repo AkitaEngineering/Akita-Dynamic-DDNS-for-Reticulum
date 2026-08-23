@@ -1,6 +1,7 @@
 """Command-line client for Akita DDNS."""
 
 import argparse
+import math
 import os
 import secrets
 import sys
@@ -37,7 +38,7 @@ from .utils import (
 
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
     return parsed
 

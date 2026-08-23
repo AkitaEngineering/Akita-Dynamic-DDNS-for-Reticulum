@@ -100,7 +100,10 @@ python -m compileall -q akita_ddns tests
 mypy akita_ddns
 ruff check akita_ddns tests
 ruff format --check akita_ddns tests
+bandit -q -r akita_ddns
+pip-audit -r requirements.txt
 python -m build
+python -m pip check
 ```
 
 See [usage examples](docs/examples.md), [architecture](docs/architecture.md), and [testing guidance](docs/testing.md).

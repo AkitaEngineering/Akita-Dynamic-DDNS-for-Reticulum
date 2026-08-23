@@ -48,7 +48,7 @@ Unclaimed namespaces are closed by default. `allow_unowned_namespaces: true` ena
 
 Registry, namespace, and reputation state use YAML only on local disk; YAML is not used on the network. Reads use `safe_load`, reject oversized files, validate structure, and cryptographically recheck signed records. Writes use `safe_dump`, mode `0600`, `fsync`, atomic replacement, and directory synchronization where the filesystem supports it.
 
-The resolution cache is a process-wide bounded LRU. Registry lookup itself is constant-time; the cache exists for consumers that use it, and mutation handlers explicitly invalidate affected entries.
+The resolution cache is a process-wide bounded LRU of complete signed entries. Protocol resolution uses it as a read-through cache, checks both cache TTL and registration expiry, and mutation handlers explicitly invalidate affected entries.
 
 ## HTTP dashboard
 

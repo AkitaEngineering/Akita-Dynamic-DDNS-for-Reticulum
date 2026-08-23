@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import random
+import secrets
 import threading
 import time
 from typing import Any, Dict, Iterable, List, Tuple
@@ -24,6 +24,7 @@ from .utils import (
 
 log = logging.getLogger(__name__)
 APP_NAME = "akita_ddns"
+_JITTER_RANDOM = secrets.SystemRandom()
 
 
 class AkitaAnnounceHandler:
@@ -171,6 +172,8 @@ class AkitaServer:
         namespace, name, rid, public_key, signature, ttl, timestamp = fields
         validate_label(namespace, "namespace")
         validate_label(name, "name")
+        if not isinstance(rid, bytes):
+            raise ValueError("RID must be bytes")
         if rid:
             validate_hash(rid, "RID")
         validate_public_key(public_key)
@@ -209,7 +212,11 @@ class AkitaServer:
         request_identity = identity_from_public_key(request_public_key)
         if not request_identity:
             return False
-        entry = self.reg.resolve(namespace, name)
+        entry = self.cache.get(namespace, name)
+        if not entry:
+            entry = self.reg.resolve(namespace, name)
+            if entry:
+                self.cache.put(namespace, name, entry)
         if not entry:
             return False
         response = encode(
@@ -323,7 +330,7 @@ class AkitaServer:
     async def run_gossip_loop(self) -> None:
         while not self._shutdown:
             await asyncio.sleep(
-                self.config["gossip_interval"] * random.uniform(0.9, 1.1)
+                self.config["gossip_interval"] * _JITTER_RANDOM.uniform(0.9, 1.1)
             )
             try:
                 self.listener_node.announce()
@@ -345,8 +352,11 @@ class AkitaServer:
     async def run_periodic_tasks(self) -> None:
         while not self._shutdown:
             await asyncio.sleep(self.config["ttl_check_interval"])
-            self.reg.run_ttl_check()
-            self.cache.run_ttl_check()
+            try:
+                self.reg.run_ttl_check()
+                self.cache.run_ttl_check()
+            except Exception:
+                log.exception("Error in maintenance loop")
 
     def shutdown(self) -> None:
         if self._shutdown:
@@ -360,6 +370,9 @@ class AkitaServer:
             log.debug("Could not deregister announce handler: %s", exc)
 
     def send_register(self, name, namespace, rid, identity, ttl) -> bool:
+        validate_label(namespace, "namespace")
+        validate_label(name, "name")
+        validate_hash(rid, "RID")
         timestamp = int(time.time())
         validate_registration_times(
             timestamp,

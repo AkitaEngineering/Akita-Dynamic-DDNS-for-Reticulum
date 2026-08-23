@@ -1,6 +1,7 @@
 """Configuration loading and validation."""
 
 import logging
+import math
 import os
 import threading
 from typing import Any, Dict, Optional
@@ -8,6 +9,8 @@ from typing import Any, Dict, Optional
 import RNS as ret
 import yaml
 
+_UNSET = None
+MAX_CONFIG_FILE_BYTES = 1024 * 1024
 DEFAULT_CONFIG: Dict[str, Any] = {
     "storage_path": "~/.config/reticulum",
     "akita_namespace_identity_hash": None,
@@ -35,7 +38,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "web_ui_host": "127.0.0.1",
     "web_ui_port": 48080,
     "web_ui_allow_mutations": False,
-    "web_ui_api_token": None,
+    "web_ui_api_token": _UNSET,
     "web_ui_max_request_bytes": 16384,
 }
 
@@ -54,6 +57,29 @@ class ConfigurationError(ValueError):
     """Raised when configuration is unsafe or invalid."""
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects ambiguous duplicate mapping keys."""
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise ConfigurationError("Configuration keys must be scalar") from exc
+        if duplicate:
+            raise ConfigurationError(f"Duplicate configuration key: {key!r}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
+
+
 def _as_bool(value: Any, key: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -69,10 +95,15 @@ def _as_bool(value: Any, key: str) -> bool:
 def _as_int(value: Any, key: str, minimum: int, maximum: int) -> int:
     if isinstance(value, bool):
         raise ConfigurationError(f"{key} must be an integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError(f"{key} must be an integer") from exc
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError as exc:
+            raise ConfigurationError(f"{key} must be an integer") from exc
+    else:
+        raise ConfigurationError(f"{key} must be an integer")
     if not minimum <= parsed <= maximum:
         raise ConfigurationError(f"{key} must be between {minimum} and {maximum}")
     return parsed
@@ -85,7 +116,7 @@ def _as_float(value: Any, key: str, minimum: float, maximum: float) -> float:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ConfigurationError(f"{key} must be a number") from exc
-    if not minimum <= parsed <= maximum:
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
         raise ConfigurationError(f"{key} must be between {minimum} and {maximum}")
     return parsed
 
@@ -100,9 +131,20 @@ def _resolve_path(value: Any, config_dir: str, key: str) -> str:
 
 
 def _validate_filename(value: Any, key: str) -> str:
-    if not isinstance(value, str) or not value or value != os.path.basename(value):
+    try:
+        encoded_length = len(value.encode("utf-8")) if isinstance(value, str) else 0
+    except UnicodeEncodeError:
+        encoded_length = 256
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or encoded_length > 255
+        or any(ord(character) < 32 for character in value)
+        or value != os.path.basename(value)
+    ):
         raise ConfigurationError(
-            f"{key} must be a filename without directory components"
+            f"{key} must be a safe filename without directory components"
         )
     return value
 
@@ -119,8 +161,18 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
         loaded: Dict[str, Any] = {}
         if os.path.exists(normalized_path):
             try:
+                if os.path.getsize(normalized_path) > MAX_CONFIG_FILE_BYTES:
+                    raise ConfigurationError(
+                        f"Configuration file exceeds {MAX_CONFIG_FILE_BYTES} bytes"
+                    )
                 with open(normalized_path, "r", encoding="utf-8") as handle:
-                    raw = yaml.safe_load(handle)
+                    loader = _UniqueKeyLoader(handle)
+                    try:
+                        raw = loader.get_single_data()
+                    finally:
+                        loader.dispose()
+            except ConfigurationError:
+                raise
             except (OSError, yaml.YAMLError) as exc:
                 raise ConfigurationError(
                     f"Could not load {normalized_path}: {exc}"
@@ -134,6 +186,8 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
                 normalized_path,
             )
 
+        if any(not isinstance(key, str) for key in loaded):
+            raise ConfigurationError("Configuration option names must be strings")
         unknown = sorted(set(loaded) - set(DEFAULT_CONFIG))
         if unknown:
             raise ConfigurationError(
@@ -214,7 +268,11 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
         cfg["log_level"] = log_level
 
         host = cfg["web_ui_host"]
-        if not isinstance(host, str) or not host.strip():
+        if (
+            not isinstance(host, str)
+            or not host.strip()
+            or any(ord(character) < 32 for character in host)
+        ):
             raise ConfigurationError("web_ui_host must be a non-empty string")
         cfg["web_ui_host"] = host.strip()
         environment_token = os.environ.get("AKITA_WEB_UI_API_TOKEN")
@@ -232,6 +290,13 @@ def load_config(config_path: str = "akita_config.yaml") -> Dict[str, Any]:
 
         for key in ("namespace_owners_file", "registry_file", "reputation_file"):
             cfg[key] = _validate_filename(cfg[key], key)
+        state_filenames = [
+            cfg["namespace_owners_file"],
+            cfg["registry_file"],
+            cfg["reputation_file"],
+        ]
+        if len(set(state_filenames)) != len(state_filenames):
+            raise ConfigurationError("Persistence filenames must be distinct")
 
         try:
             os.makedirs(cfg["storage_path"], mode=0o700, exist_ok=True)

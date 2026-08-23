@@ -89,3 +89,13 @@ def test_unowned_namespaces_are_closed_by_default(tmp_path):
     manager = NamespaceManager(PersistentStorage(settings), settings)
 
     assert not manager.is_authorized("unclaimed", authority.hash)
+
+
+def test_namespace_change_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    authority = ret.Identity()
+    settings = config(tmp_path, authority)
+    manager = NamespaceManager(PersistentStorage(settings), settings)
+    monkeypatch.setattr(manager.storage, "save_namespaces", lambda records: False)
+
+    assert not create(manager, "secure", authority)
+    assert manager.get_owners() == {}

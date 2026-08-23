@@ -74,8 +74,8 @@ class NamespaceManager:
                 log.warning("Ignoring invalid namespace ownership chain %r", namespace)
                 self._records.pop(namespace, None)
 
-    def _save(self) -> None:
-        self.storage.save_namespaces(self._records)
+    def _save(self) -> bool:
+        return self.storage.save_namespaces(self._records)
 
     def create_namespace(
         self,
@@ -120,8 +120,9 @@ class NamespaceManager:
                 "owner": owner_hex,
                 "events": [event],
             }
-            if persist:
-                self._save()
+            if persist and not self._save():
+                del self._records[ns]
+                return False
         log.info("Created namespace %s owner %s", ns, owner_hex)
         return True
 
@@ -177,6 +178,7 @@ class NamespaceManager:
             record = self._records.get(ns)
             if not record:
                 return False
+            original_record = copy.deepcopy(record)
             events: List[Dict[str, Any]] = record["events"]
             if sequence > len(events):
                 return False
@@ -204,8 +206,9 @@ class NamespaceManager:
 
             events.append(event)
             record["owner"] = new_owner.hex()
-            if persist:
-                self._save()
+            if persist and not self._save():
+                self._records[ns] = original_record
+                return False
         log.info(
             "Transferred namespace %s to %s at sequence %s",
             ns,

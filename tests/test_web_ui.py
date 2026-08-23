@@ -74,6 +74,10 @@ class TestWebUI(unittest.IsolatedAsyncioTestCase):
         response = await client.post("/api/register", json={})
 
         self.assertEqual(response.status, 404)
+        self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        self.assertEqual(
+            response.headers["Cross-Origin-Resource-Policy"], "same-origin"
+        )
 
     async def test_mutation_requires_bearer_token(self):
         client, server = await self.make_client(mutations=True)

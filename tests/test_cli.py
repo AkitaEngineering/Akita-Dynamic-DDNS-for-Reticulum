@@ -1,6 +1,7 @@
 import time
 import types
 
+import pytest
 import RNS as ret
 
 import akita_ddns.cli as cli_module
@@ -119,3 +120,10 @@ def test_resolution_receiver_rejects_wrong_nonce(tmp_path):
     receiver.on_response(response, types.SimpleNamespace())
 
     assert not receiver.event.is_set()
+
+
+def test_cli_rejects_non_finite_timeout():
+    with pytest.raises(SystemExit):
+        setup_cli_parser().parse_args(
+            ["resolve", "--name", "router", "--timeout", "nan"]
+        )

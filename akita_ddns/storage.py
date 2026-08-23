@@ -25,7 +25,11 @@ log = logging.getLogger(__name__)
 
 # (RID bytes; empty for a tombstone, signed timestamp, signature, expiry, public key)
 RegistryEntry = Tuple[bytes, int, bytes, int, bytes]
-CacheEntry = Tuple[bytes, float]
+CacheEntry = Tuple[RegistryEntry, float]
+
+
+class StorageError(RuntimeError):
+    """Raised when configured persistent state cannot be read safely."""
 
 
 class PersistentStorage:
@@ -36,9 +40,9 @@ class PersistentStorage:
         self._file_lock = threading.Lock()
         self.max_file_bytes = int(config.get("max_state_file_bytes", 16 * 1024 * 1024))
 
-    def _save_yaml(self, data: Dict[str, Any], file_path: Optional[str]) -> None:
+    def _save_yaml(self, data: Dict[str, Any], file_path: Optional[str]) -> bool:
         if not self.config.get("persist_state") or not file_path:
-            return
+            return True
 
         directory = os.path.dirname(os.path.abspath(file_path))
         with self._file_lock:
@@ -55,9 +59,10 @@ class PersistentStorage:
                     )
                     handle.flush()
                     os.fsync(handle.fileno())
+                    if os.fstat(handle.fileno()).st_size > self.max_file_bytes:
+                        raise StorageError(f"state exceeds {self.max_file_bytes} bytes")
                 os.replace(temp_path, file_path)
                 temp_path = None
-                os.chmod(file_path, 0o600)
                 try:
                     directory_fd = os.open(directory, os.O_RDONLY)
                     try:
@@ -67,8 +72,10 @@ class PersistentStorage:
                 except OSError:
                     # Some filesystems do not support syncing directory handles.
                     pass
-            except (OSError, yaml.YAMLError) as exc:
+                return True
+            except (OSError, StorageError, yaml.YAMLError) as exc:
                 log.error("Failed to save %s: %s", file_path, exc)
+                return False
             finally:
                 if temp_path:
                     try:
@@ -85,6 +92,8 @@ class PersistentStorage:
             return {}
         with self._file_lock:
             try:
+                if os.path.islink(file_path) or not os.path.isfile(file_path):
+                    raise ValueError("state path is not a regular file")
                 if os.path.getsize(file_path) > self.max_file_bytes:
                     raise ValueError(f"state file exceeds {self.max_file_bytes} bytes")
                 with open(file_path, "r", encoding="utf-8") as handle:
@@ -95,12 +104,11 @@ class PersistentStorage:
                     raise ValueError("state root is not a mapping")
                 return data
             except (OSError, ValueError, yaml.YAMLError) as exc:
-                log.error("Failed to load %s: %s", file_path, exc)
-                return {}
+                raise StorageError(f"Failed to load {file_path}: {exc}") from exc
 
-    def save_registry(self, registry_data: Dict[str, Dict[str, RegistryEntry]]) -> None:
+    def save_registry(self, registry_data: Dict[str, Dict[str, RegistryEntry]]) -> bool:
         if not self.config.get("registry_file_path"):
-            return
+            return True
         now = time.time()
         serializable: Dict[str, Dict[str, List[Any]]] = {}
         for namespace, names in registry_data.items():
@@ -116,7 +124,7 @@ class PersistentStorage:
                     ]
             if saved_names:
                 serializable[namespace] = saved_names
-        self._save_yaml(serializable, self.config["registry_file_path"])
+        return self._save_yaml(serializable, self.config["registry_file_path"])
 
     def load_registry(self) -> Dict[str, Dict[str, RegistryEntry]]:
         raw = self._load_yaml(self.config.get("registry_file_path"))
@@ -124,7 +132,14 @@ class PersistentStorage:
         now = int(time.time())
         max_ttl = int(self.config.get("max_registration_ttl", 604800))
         max_skew = int(self.config.get("max_clock_skew", 300))
+        max_entries = int(self.config.get("max_registry_size", 10000))
+        entry_count = 0
         for namespace, names in raw.items():
+            if entry_count >= max_entries:
+                log.warning(
+                    "Persisted registry exceeds configured capacity; truncating"
+                )
+                break
             if not isinstance(names, dict):
                 continue
             try:
@@ -133,6 +148,11 @@ class PersistentStorage:
                 continue
             valid_names: Dict[str, RegistryEntry] = {}
             for name, serialized in names.items():
+                if entry_count >= max_entries:
+                    log.warning(
+                        "Persisted registry exceeds configured capacity; truncating"
+                    )
+                    break
                 try:
                     validate_label(name, "name")
                     if not isinstance(serialized, list) or len(serialized) != 5:
@@ -168,6 +188,7 @@ class PersistentStorage:
                         expiration,
                         public_key,
                     )
+                    entry_count += 1
                 except (TypeError, ValueError, OverflowError):
                     log.warning(
                         "Ignoring invalid persisted registry entry %r@%r",
@@ -178,16 +199,18 @@ class PersistentStorage:
                 registry[namespace] = valid_names
         return registry
 
-    def save_namespaces(self, records: Dict[str, Any]) -> None:
-        self._save_yaml(
+    def save_namespaces(self, records: Dict[str, Any]) -> bool:
+        return self._save_yaml(
             copy.deepcopy(records), self.config.get("namespace_owners_file_path")
         )
 
     def load_namespaces(self) -> Dict[str, Any]:
         return self._load_yaml(self.config.get("namespace_owners_file_path"))
 
-    def save_reputation(self, reputation: Dict[str, int]) -> None:
-        self._save_yaml(reputation.copy(), self.config.get("reputation_file_path"))
+    def save_reputation(self, reputation: Dict[str, int]) -> bool:
+        return self._save_yaml(
+            reputation.copy(), self.config.get("reputation_file_path")
+        )
 
     def load_reputation(self) -> Dict[str, int]:
         raw = self._load_yaml(self.config.get("reputation_file_path"))
@@ -239,6 +262,8 @@ class Registry:
     ) -> bool:
         validate_label(ns, "namespace")
         validate_label(name, "name")
+        if not isinstance(rid, bytes):
+            raise ValueError("RID must be bytes")
         if rid:
             validate_hash(rid, "RID")
         validate_signature(sig)
@@ -264,10 +289,19 @@ class Registry:
             if current and not self._wins(entry, current):
                 return False
             if current is None and self._entry_count() >= self.max_size:
-                log.warning("Registry capacity reached; refusing new entry")
-                return False
+                self.run_ttl_check()
+                if self._entry_count() >= self.max_size:
+                    log.warning("Registry capacity reached; refusing new entry")
+                    return False
             self._registry.setdefault(ns, {})[name] = entry
-            self.storage.save_registry(self._registry)
+            if not self.storage.save_registry(self._registry):
+                if current is None:
+                    del self._registry[ns][name]
+                    if not self._registry[ns]:
+                        del self._registry[ns]
+                else:
+                    self._registry[ns][name] = current
+                return False
         if rid:
             log.info("Registered %s@%s -> %s", name, ns, rid.hex())
         else:
@@ -285,7 +319,8 @@ class Registry:
                 del self._registry[ns][name]
                 if not self._registry[ns]:
                     del self._registry[ns]
-                self.storage.save_registry(self._registry)
+                if not self.storage.save_registry(self._registry):
+                    self._registry.setdefault(ns, {})[name] = entry
         return None
 
     def process_gossip(
@@ -302,7 +337,15 @@ class Registry:
                     identity = identity_from_public_key(public_key)
                     if not identity:
                         continue
-                    if namespace in owners and owners[namespace] != identity.hash.hex():
+                    expected_owner = owners.get(namespace)
+                    if expected_owner is None and not self.config.get(
+                        "allow_unowned_namespaces", False
+                    ):
+                        continue
+                    if (
+                        expected_owner is not None
+                        and expected_owner != identity.hash.hex()
+                    ):
                         continue
                     with self._lock:
                         existed = name in self._registry.get(namespace, {})
@@ -327,15 +370,17 @@ class Registry:
         removed = 0
         with self._lock:
             names = self._registry.get(namespace, {})
+            removed_entries = {}
             for name in list(names):
                 identity = identity_from_public_key(names[name][4])
                 if not identity or identity.hash.hex() != owner_hex:
-                    del names[name]
+                    removed_entries[name] = names.pop(name)
                     removed += 1
             if not names and namespace in self._registry:
                 del self._registry[namespace]
-            if removed:
-                self.storage.save_registry(self._registry)
+            if removed and not self.storage.save_registry(self._registry):
+                self._registry.setdefault(namespace, {}).update(removed_entries)
+                return 0
         return removed
 
     def reconcile_namespace_owners(
@@ -344,6 +389,7 @@ class Registry:
         """Remove persisted entries that are no longer authorized by namespace state."""
         removed = 0
         with self._lock:
+            removed_entries: Dict[str, Dict[str, RegistryEntry]] = {}
             for namespace in list(self._registry):
                 expected_owner = owners.get(namespace)
                 if expected_owner is None and allow_unowned:
@@ -357,27 +403,36 @@ class Registry:
                         or not identity
                         or identity.hash.hex() != expected_owner
                     ):
-                        del self._registry[namespace][name]
+                        removed_entries.setdefault(namespace, {})[name] = (
+                            self._registry[namespace].pop(name)
+                        )
                         removed += 1
                 if not self._registry[namespace]:
                     del self._registry[namespace]
-            if removed:
-                self.storage.save_registry(self._registry)
+            if removed and not self.storage.save_registry(self._registry):
+                for namespace, names in removed_entries.items():
+                    self._registry.setdefault(namespace, {}).update(names)
+                return 0
         return removed
 
     def run_ttl_check(self) -> int:
         now = time.time()
         removed = 0
         with self._lock:
+            removed_entries: Dict[str, Dict[str, RegistryEntry]] = {}
             for namespace in list(self._registry):
                 for name in list(self._registry[namespace]):
                     if self._registry[namespace][name][3] <= now:
-                        del self._registry[namespace][name]
+                        removed_entries.setdefault(namespace, {})[name] = (
+                            self._registry[namespace].pop(name)
+                        )
                         removed += 1
                 if not self._registry[namespace]:
                     del self._registry[namespace]
-            if removed:
-                self.storage.save_registry(self._registry)
+            if removed and not self.storage.save_registry(self._registry):
+                for namespace, names in removed_entries.items():
+                    self._registry.setdefault(namespace, {}).update(names)
+                return 0
         return removed
 
     def get_registry_for_gossip(self) -> Dict[str, Dict[str, RegistryEntry]]:
@@ -415,7 +470,7 @@ class Registry:
 
 
 class Cache:
-    """A bounded process-wide LRU cache."""
+    """A bounded process-wide LRU cache of signed registry entries."""
 
     def __init__(self, config: Dict[str, Any]):
         self.ttl = int(config.get("cache_ttl", 300))
@@ -423,22 +478,23 @@ class Cache:
         self._cache: "OrderedDict[Tuple[str, str], CacheEntry]" = OrderedDict()
         self._lock = threading.RLock()
 
-    def get(self, ns: str, name: str) -> Optional[bytes]:
+    def get(self, ns: str, name: str) -> Optional[RegistryEntry]:
         key = (ns, name)
         with self._lock:
             entry = self._cache.get(key)
             if not entry:
                 return None
-            if time.time() - entry[1] >= self.ttl:
+            now = time.time()
+            if now - entry[1] >= self.ttl or now >= entry[0][3]:
                 del self._cache[key]
                 return None
             self._cache.move_to_end(key)
             return entry[0]
 
-    def put(self, ns: str, name: str, rid: bytes) -> None:
+    def put(self, ns: str, name: str, entry: RegistryEntry) -> None:
         key = (ns, name)
         with self._lock:
-            self._cache[key] = (rid, time.time())
+            self._cache[key] = (entry, time.time())
             self._cache.move_to_end(key)
             while len(self._cache) > self.max_size:
                 self._cache.popitem(last=False)
@@ -460,7 +516,9 @@ class Cache:
         now = time.time()
         with self._lock:
             expired = [
-                key for key, entry in self._cache.items() if now - entry[1] >= self.ttl
+                key
+                for key, entry in self._cache.items()
+                if now - entry[1] >= self.ttl or now >= entry[0][3]
             ]
             for key in expired:
                 del self._cache[key]

@@ -18,7 +18,16 @@ log = logging.getLogger(__name__)
 
 @web.middleware
 async def security_headers(request, handler):
-    response = await handler(request)
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        _set_security_headers(exc)
+        raise
+    _set_security_headers(response)
+    return response
+
+
+def _set_security_headers(response: web.StreamResponse) -> None:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -27,7 +36,10 @@ async def security_headers(request, handler):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    return response
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+    )
 
 
 class WebUI:

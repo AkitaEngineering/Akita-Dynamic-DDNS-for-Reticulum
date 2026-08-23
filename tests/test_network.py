@@ -1,6 +1,7 @@
 import time
 import types
 
+import pytest
 import RNS as ret
 
 import akita_ddns.network as network_module
@@ -195,6 +196,17 @@ def test_register_handler_rejects_non_owner(tmp_path):
     assert server.reg.resolve("secure", "router") is None
 
 
+def test_register_handler_rejects_non_bytes_rid_as_malformed(tmp_path):
+    owner = ret.Identity()
+    server = integrated_server(tmp_path, owner)
+    claim_namespace(server, owner)
+
+    with pytest.raises(ValueError, match="RID must be bytes"):
+        server._handle_register(
+            ["secure", "router", "", owner.get_public_key(), b"x" * 64, 300, 1]
+        )
+
+
 def test_gossip_uses_one_bounded_message_per_record(tmp_path):
     owner = ret.Identity()
     server = integrated_server(tmp_path, owner)
@@ -212,3 +224,42 @@ def test_gossip_uses_one_bounded_message_per_record(tmp_path):
 
     assert commands == [Command.GOSSIP_REGISTER, Command.GOSSIP_NAMESPACE_CREATE]
     assert all(len(message) <= ret.Packet.MDU for message in messages)
+
+
+def test_resolution_uses_read_through_cache(tmp_path, monkeypatch):
+    owner = ret.Identity()
+    requester = ret.Identity()
+    server = integrated_server(tmp_path, owner)
+    server.network_id = owner.hash.hex()
+    claim_namespace(server, owner)
+    rid = ret.Identity().hash
+    timestamp = int(time.time())
+    ttl = 300
+    payload = build_registration_payload("secure", "router", rid.hex(), ttl, timestamp)
+    complete_entry = (
+        rid,
+        timestamp,
+        generate_signature(payload, owner),
+        timestamp + ttl,
+        owner.get_public_key(),
+    )
+    assert server.reg.register("secure", "router", *complete_entry)
+    sent = []
+    monkeypatch.setattr(
+        server, "_send", lambda destination, payload: sent.append(payload) or True
+    )
+
+    assert server._handle_resolve(
+        ["secure", "router", requester.get_public_key(), b"a" * 16]
+    )
+    monkeypatch.setattr(
+        server.reg,
+        "resolve",
+        lambda namespace, name: (_ for _ in ()).throw(
+            AssertionError("registry should not be consulted on a cache hit")
+        ),
+    )
+    assert server._handle_resolve(
+        ["secure", "router", requester.get_public_key(), b"b" * 16]
+    )
+    assert len(sent) == 2

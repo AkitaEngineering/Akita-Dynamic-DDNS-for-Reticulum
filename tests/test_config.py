@@ -51,6 +51,14 @@ def test_unknown_option_fails_fast(tmp_path):
         config_module.load_config(str(path))
 
 
+def test_duplicate_option_fails_fast(tmp_path):
+    path = tmp_path / "config.yaml"
+    write_config(path, "web_ui_enabled: true\nweb_ui_enabled: false\n")
+
+    with pytest.raises(config_module.ConfigurationError, match="Duplicate"):
+        config_module.load_config(str(path))
+
+
 def test_mutating_web_api_requires_long_token(tmp_path, monkeypatch):
     path = tmp_path / "config.yaml"
     write_config(path, "web_ui_allow_mutations: true\n")
@@ -75,4 +83,39 @@ def test_invalid_timing_relationship_is_rejected(tmp_path):
     write_config(path, "gossip_interval: 120\npeer_ttl: 120\n")
 
     with pytest.raises(config_module.ConfigurationError, match="peer_ttl"):
+        config_module.load_config(str(path))
+
+
+def test_integer_settings_reject_lossy_float_values(tmp_path):
+    path = tmp_path / "config.yaml"
+    write_config(path, "default_ttl: 1.5\n")
+
+    with pytest.raises(config_module.ConfigurationError, match="default_ttl"):
+        config_module.load_config(str(path))
+
+
+def test_numeric_settings_reject_non_finite_values(tmp_path):
+    path = tmp_path / "config.yaml"
+    write_config(path, "rate_limit_requests_per_sec: .nan\n")
+
+    with pytest.raises(config_module.ConfigurationError, match="rate_limit"):
+        config_module.load_config(str(path))
+
+
+def test_persistence_filenames_must_be_distinct(tmp_path):
+    path = tmp_path / "config.yaml"
+    write_config(
+        path,
+        "registry_file: shared.yaml\nnamespace_owners_file: shared.yaml\n",
+    )
+
+    with pytest.raises(config_module.ConfigurationError, match="distinct"):
+        config_module.load_config(str(path))
+
+
+def test_persistence_filename_rejects_special_directory_names(tmp_path):
+    path = tmp_path / "config.yaml"
+    write_config(path, "registry_file: '..'\n")
+
+    with pytest.raises(config_module.ConfigurationError, match="safe filename"):
         config_module.load_config(str(path))

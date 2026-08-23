@@ -11,7 +11,7 @@ class ReputationManager:
         self._lock = threading.RLock()
         self._rep = self.storage.load_reputation()
 
-    def update_reputation(self, rid: bytes, change: int) -> None:
+    def update_reputation(self, rid: bytes, change: int) -> bool:
         if (
             not isinstance(rid, bytes)
             or not isinstance(change, int)
@@ -20,8 +20,15 @@ class ReputationManager:
             raise ValueError("Invalid reputation update")
         rid_hex = rid.hex()
         with self._lock:
-            self._rep[rid_hex] = self._rep.get(rid_hex, 0) + change
-            self.storage.save_reputation(self._rep)
+            previous = self._rep.get(rid_hex)
+            self._rep[rid_hex] = (previous or 0) + change
+            if not self.storage.save_reputation(self._rep):
+                if previous is None:
+                    del self._rep[rid_hex]
+                else:
+                    self._rep[rid_hex] = previous
+                return False
+            return True
 
     def get_reputation(self, rid: bytes) -> int:
         with self._lock:
